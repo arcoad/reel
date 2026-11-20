@@ -1,6 +1,6 @@
 [package]
 name = "vkx-desktop"
-version = "0.1.7"
+version = "0.2.0"
 edition = "2021"
 description = "VKX Desktop music player"
 
@@ -15,3 +15,5 @@ rusqlite = { version = "0.43.0", features = ["bundled"] }
 futures-util = "0.3.34"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 tauri-plugin-updater = "2.14.1"
+tauri-plugin-single-instance = "2.5.5"
+tauri-plugin-autostart = "2.7.0"

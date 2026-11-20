@@ -17,6 +17,9 @@ const state = {
   settings: {},
   hls: null,
   loading: false,
+  cacheMeta: new Map(),
+  resumePosition: 0,
+  saveTimer: null,
   section: null,
   playlists: [],
   libraryKeys: new Set(),
@@ -77,16 +80,39 @@ function mediaUrl(key) {
   return `http://vkxcache.localhost/${key}`;
 }
 
-function cacheMeta() {
+async function loadCacheMeta() {
   try {
-    return JSON.parse(localStorage.getItem(CACHE_META) || "{}");
+    const rows = await invoke("cache_meta_all");
+    state.cacheMeta = new Map(rows);
+    if (!rows.length) {
+      try {
+        const legacy = JSON.parse(localStorage.getItem(CACHE_META) || "{}");
+        for (const [key, value] of Object.entries(legacy)) {
+          const json = JSON.stringify(value);
+          state.cacheMeta.set(key, json);
+          await invoke("cache_meta_set", { key, json });
+        }
+      } catch {}
+    }
   } catch {
-    return {};
+    state.cacheMeta = new Map();
   }
 }
 
-function saveCacheMeta(meta) {
-  localStorage.setItem(CACHE_META, JSON.stringify(meta));
+function cacheMetaObject() {
+  const result = {};
+  for (const [key, json] of state.cacheMeta) {
+    try {
+      result[key] = JSON.parse(json);
+    } catch {}
+  }
+  return result;
+}
+
+async function setCacheMeta(key, track) {
+  const json = JSON.stringify(track);
+  state.cacheMeta.set(key, json);
+  await invoke("cache_meta_set", { key, json });
 }
 
 async function api(method, params = {}) {
@@ -236,7 +262,7 @@ async function afterLogin() {
   const tokenUserId = state.token ? state.token.user_id : null;
   if (tokenUserId && (!state.user || !state.user.id)) state.user = { ...(state.user || {}), id: tokenUserId };
   renderUserName();
-  restoreQueue().catch((e) => console.warn("queue restore failed", e));
+  restorePlayback().catch((e) => console.warn("playback restore failed", e));
   await openView("library");
   loadAccount();
 }
@@ -255,6 +281,7 @@ function showUpdatePrompt() {
 let lastUpdateCheck = 0;
 
 async function checkUpdates(manual = false) {
+  if (state.settings.update_notifications === "0") return;
   const st = el("update-status");
   lastUpdateCheck = Date.now();
   if (st) st.textContent = "Проверяю…";
@@ -293,10 +320,15 @@ async function installUpdate() {
 
 async function boot() {
   await loadSettings();
+  await loadCacheMeta();
   state.token = await invoke("get_token");
   if (state.token) await afterLogin();
   else showLogin();
   await refreshCacheIndex();
+  setInterval(() => {
+    if (!audio.paused) savePlayback();
+  }, 5000);
+  window.addEventListener("beforeunload", () => savePlayback());
   checkUpdates().catch(() => {});
   window.addEventListener("focus", () => {
     if (document.hidden) return;
@@ -784,9 +816,7 @@ async function cacheTrack(t) {
   const key = trackKey(t);
   try {
     await invoke("cache_download", { key, url: t.url });
-    const meta = cacheMeta();
-    meta[key] = t;
-    saveCacheMeta(meta);
+    await setCacheMeta(key, t);
     await refreshCacheIndex();
     const row = document.querySelector(`.track[data-idx]`);
     if (state.view === "cache") await renderCache();
@@ -802,7 +832,7 @@ async function cacheTrack(t) {
 
 async function renderCache() {
   await refreshCacheIndex();
-  const meta = cacheMeta();
+  const meta = cacheMetaObject();
   const entries = [...state.cache.values()].sort((a, b) => b.created_at - a.created_at);
   const total = entries.reduce((s, e) => s + (e.size || 0), 0);
   const list = entries
@@ -832,9 +862,7 @@ async function renderCache() {
       e.stopPropagation();
       const entry = list[Number(btn.dataset.del)];
       await invoke("cache_delete", { key: entry.key });
-      const meta = cacheMeta();
-      delete meta[entry.key];
-      saveCacheMeta(meta);
+      state.cacheMeta.delete(entry.key);
       await renderCache();
     });
   });
@@ -843,82 +871,200 @@ async function renderCache() {
     clear.addEventListener("click", async () => {
       if (!confirm("Удалить весь кэш?")) return;
       await invoke("cache_clear");
-      saveCacheMeta({});
+      state.cacheMeta.clear();
       await renderCache();
     });
 }
 
+function switchRow(key, label, desc, on) {
+  return `<div class="setting-row"><div><div class="setting-label">${label}</div><div class="setting-desc">${desc}</div></div><button class="switch ${on ? "on" : ""}" data-toggle="${key}" role="switch" aria-checked="${on}"><span></span></button></div>`;
+}
+
+function updateProfileDom() {
+  const avatar = state.settings.gh_avatar || "https://github.com/arcoad.png";
+  const name = state.settings.gh_name || "arcoad";
+  const login = state.settings.gh_login || "arcoad";
+  const box = el("profile-avatar");
+  if (box) {
+    let img = box.querySelector("img");
+    if (avatar) {
+      if (!img) {
+        img = document.createElement("img");
+        box.prepend(img);
+      }
+      img.src = avatar;
+      img.style.display = "block";
+      img.onerror = () => {
+        img.style.display = "none";
+        const initial = el("gh-initial");
+        if (initial) initial.style.display = "block";
+      };
+    }
+    const initial = el("gh-initial");
+    if (initial) initial.style.display = avatar ? "none" : "block";
+  }
+  const nameNode = el("gh-name");
+  if (nameNode) nameNode.textContent = name;
+  const loginNode = el("gh-login");
+  if (loginNode) loginNode.textContent = `@${login}`;
+}
+
+async function loadGithubProfile() {
+  updateProfileDom();
+  const age = Date.now() - Number(state.settings.gh_fetched_at || 0);
+  if (state.settings.gh_avatar && age < 24 * 60 * 60 * 1000) return;
+  try {
+    const profile = await invoke("github_profile");
+    if (!profile) return;
+    if (profile.avatar_url) await setSetting("gh_avatar", profile.avatar_url);
+    if (profile.name || profile.login) await setSetting("gh_name", profile.name || profile.login);
+    if (profile.login) await setSetting("gh_login", profile.login);
+    await setSetting("gh_fetched_at", String(Date.now()));
+    updateProfileDom();
+  } catch {
+    if (!state.settings.gh_avatar) {
+      await setSetting("gh_avatar", "https://github.com/arcoad.png");
+      updateProfileDom();
+    }
+  }
+}
+
 function renderSettings() {
   const s = state.settings;
+  const enabled = (key, fallback = true) => (s[key] === undefined ? fallback : s[key] === "1");
+  const userName = [state.user?.first_name, state.user?.last_name].filter(Boolean).join(" ") || state.user?.domain || (state.user?.id ? String(state.user.id) : "Не выполнен вход");
+  const avatar = s.gh_avatar || "https://github.com/arcoad.png";
+  const name = s.gh_name || "arcoad";
+  const login = s.gh_login || "arcoad";
   el("content").innerHTML = `<div class="settings">
+    <div class="profile-card">
+      <div class="profile-avatar" id="profile-avatar">${avatar ? `<img id="gh-avatar" src="${esc(avatar)}" alt="" />` : ""}<span id="gh-initial">${esc((name || "A").trim()[0].toUpperCase())}</span></div>
+      <div class="profile-info"><div class="profile-name" id="gh-name">${esc(name)}</div><div class="profile-login" id="gh-login">@${esc(login)}</div></div>
+      <div class="profile-links"><button class="ghost" data-link="https://t.me/arcoad">Telegram</button><button class="ghost" data-link="https://github.com/arcoad">GitHub</button></div>
+    </div>
+
+    <div class="section-title">Поведение</div>
+    <div class="setting-list">
+      ${switchRow("autostart", "Запускать с Windows", "Автозапуск при входе", false)}
+      ${switchRow("start_minimized", "Стартовать свёрнутым", "Сразу в трей", enabled("start_minimized", false))}
+      ${switchRow("close_to_tray", "Закрывать в трей", "Музыка продолжает играть", enabled("close_to_tray", true))}
+      ${switchRow("save_position", "Продолжать с места", "Позиция и очередь сохраняются", enabled("save_position", true))}
+      ${switchRow("update_notifications", "Уведомлять об обновлениях", "Окно при новой версии", enabled("update_notifications", true))}
+    </div>
+
     <div class="section-title">Внешний вид</div>
-    <div class="track"><div class="idx">T</div><div><div class="title">Тема</div><div class="sub">Оформление интерфейса</div></div><div></div>
+    <div class="setting-row"><div><div class="setting-label">Тема</div><div class="setting-desc">Оформление интерфейса</div></div>
       <select id="theme-select">${themes.map((t) => `<option value="${t}" ${t === (s.theme || "dark") ? "selected" : ""}>${t}</option>`).join("")}</select>
     </div>
-    <div class="track"><div class="idx">A</div><div><div class="title">Акцент</div><div class="sub">Цвет кнопок и выделения</div></div><div></div>
+    <div class="setting-row"><div><div class="setting-label">Акцент</div><div class="setting-desc">Кнопки и выделение</div></div>
       <input id="accent-input" type="color" value="${esc(s.accent || "#6f9dff")}" />
     </div>
-    <div class="section-title">Аккаунт</div>
-    <div class="track"><div class="idx">ID</div><div><div class="title">client_id для OAuth</div><div class="sub">Используется кнопкой «Открыть VK OAuth»</div></div><div></div>
-      <div class="row"><input id="client-id-input" placeholder="2685278" value="${esc(s.client_id || "")}" /><button id="save-client" class="ghost">Сохранить</button></div>
+
+    <div class="section-title">Локальная музыка</div>
+    <div class="setting-row"><div><div class="setting-label">Папка</div><div class="setting-desc">${state.local.length} треков · MP3/FLAC/M4A/OGG/WAV</div></div>
+      <div class="row"><input id="folder-input" value="${esc(s.music_folder || "")}" placeholder="D:\\Music" /><button id="scan-btn" class="ghost">Сканировать</button></div>
     </div>
-    <div class="track"><div class="idx">VK</div><div><div class="title">Токен</div><div class="sub">Права audio, offline</div></div><div></div>
+
+    <div class="section-title">Данные</div>
+    <div class="setting-row"><div><div class="setting-label">Кэш</div><div class="setting-desc" id="cache-size">…</div></div>
+      <div class="row"><button id="cache-cleanup" class="ghost">Почистить</button><button id="cache-drop" class="ghost">Очистить</button></div>
+    </div>
+    <div class="setting-row"><div><div class="setting-label">Логи</div><div class="setting-desc">Диагностика приложения</div></div>
+      <button id="open-logs" class="ghost">Открыть</button>
+    </div>
+
+    <div class="section-title">Аккаунт</div>
+    <div class="setting-row"><div><div class="setting-label">${esc(userName)}</div><div class="setting-desc">VK</div></div>
       <div class="row"><button id="reauth" class="ghost">Сменить</button><button id="logout2" class="ghost">Выйти</button></div>
     </div>
-    <div class="section-title">Локальная фонотека</div>
-    <div class="track"><div class="idx">M</div><div><div class="title">Папка с музыкой</div><div class="sub">MP3, FLAC, M4A, OGG, WAV · рекурсивно</div></div><div></div>
-      <div class="row"><input id="folder-input" placeholder="D:\\Music" value="${esc(s.music_folder || "")}" /><button id="scan-btn" class="ghost">Сканировать</button></div>
-    </div>
-    <div class="track"><div class="idx">n</div><div><div class="title">Треков в базе</div><div class="sub">${state.local.length}</div></div><div></div><button id="rescan-btn" class="ghost">Обновить список</button></div>
-    <div class="section-title">Обновления</div>
-    <div class="track"><div class="idx">U</div><div><div class="title">Версия</div><div class="sub" id="update-status">Проверка не запускалась</div></div><div></div>
-      <div class="row"><button id="update-check" class="ghost">Проверить</button><button id="show-update" class="ghost">Что нового</button><button id="update-install" class="ghost hidden">Обновить</button></div>
-    </div>
-    <div class="track"><div class="idx">URL</div><div><div class="title">Endpoint обновлений</div><div class="sub">latest.json из GitHub Releases</div></div><div></div>
-      <div class="row"><input id="update-endpoint" value="${esc(s.update_endpoint || "")}" placeholder="https://github.com/OWNER/REPO/releases/latest/download/latest.json" /><button id="save-endpoint" class="ghost">Сохранить</button></div>
-    </div>
+
     <div class="section-title">О приложении</div>
-    <div class="track"><div class="idx">i</div><div><div class="title">VKX Desktop <span id="app-version">0.1.7</span></div><div class="sub">Rust + Tauri 2 · порт музыкального контура VKX 9.0</div></div><div></div><div class="muted small">SPEC.md</div></div></div>`;
+    <div class="setting-row"><div><div class="setting-label">VKX Desktop <span id="app-version">0.2.0</span></div><div class="setting-desc">Rust + Tauri · неофициальный порт VKX</div></div>
+      <button class="ghost" data-link="https://github.com/arcoad/vkx-desktop">GitHub</button>
+    </div>
+  </div>`;
+
   el("theme-select").addEventListener("change", (e) => setSetting("theme", e.target.value));
   el("accent-input").addEventListener("input", (e) => setSetting("accent", e.target.value));
-  el("save-client").addEventListener("click", async () => {
-    await setSetting("client_id", el("client-id-input").value.trim());
-    alert("Сохранено");
+  el("content").querySelectorAll("[data-toggle]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const key = button.dataset.toggle;
+      const next = !button.classList.contains("on");
+      button.classList.toggle("on", next);
+      button.setAttribute("aria-checked", String(next));
+      await setSetting(key, next ? "1" : "0");
+      if (key === "close_to_tray") await invoke("set_close_to_tray", { enabled: next });
+      if (key === "autostart") {
+        try {
+          await invoke("autostart_set", { enabled: next });
+        } catch (e) {
+          button.classList.toggle("on", !next);
+          button.setAttribute("aria-checked", String(!next));
+          await setSetting(key, next ? "0" : "1");
+          toast(`Автозапуск: ${e}`);
+        }
+      }
+    });
   });
-  el("reauth").addEventListener("click", () => showLogin());
-  el("logout2").addEventListener("click", doLogout);
+  invoke("autostart_get")
+    .then((on) => {
+      const button = el("content").querySelector('[data-toggle="autostart"]');
+      if (button) {
+        button.classList.toggle("on", !!on);
+        button.setAttribute("aria-checked", String(!!on));
+      }
+    })
+    .catch(() => {});
+  el("content").querySelectorAll("[data-link]").forEach((button) => {
+    button.addEventListener("click", () => invoke("open_url", { url: button.dataset.link }).catch((e) => toast(String(e))));
+  });
   el("scan-btn").addEventListener("click", async () => {
     const dir = el("folder-input").value.trim();
     if (!dir) return;
     try {
-      const list = await invoke("scan_folder", { dir });
-      await setSetting("music_folder", dir);
-      state.local = list;
-      alert(`Добавлено треков: ${list.length}`);
-    } catch (e) {
-      alert(`Ошибка сканирования: ${e}`);
-    }
-  });
-  el("rescan-btn").addEventListener("click", async () => {
-    const dir = state.settings.music_folder || el("folder-input").value.trim();
-    if (!dir) return;
-    try {
       state.local = await invoke("scan_folder", { dir });
+      await setSetting("music_folder", dir);
       renderSettings();
+      toast(`Добавлено треков: ${state.local.length}`);
     } catch (e) {
-      alert(`Ошибка: ${e}`);
+      toast(`Ошибка сканирования: ${e}`);
     }
   });
-  el("update-check").addEventListener("click", () => checkUpdates(true));
-  el("update-install").addEventListener("click", installUpdate);
-  el("show-update").addEventListener("click", () => {
-    if (state.update && state.update.available) showUpdatePrompt();
-    else checkUpdates(true);
+  invoke("cache_list")
+    .then((list) => {
+      const total = list.reduce((sum, entry) => sum + (entry.size || 0), 0);
+      const node = el("cache-size");
+      if (node) node.textContent = `${list.length} треков · ${(total / 1048576).toFixed(1)} MB`;
+    })
+    .catch(() => {});
+  el("cache-cleanup").addEventListener("click", async () => {
+    try {
+      const freed = await invoke("cache_cleanup");
+      await loadCacheMeta();
+      renderSettings();
+      toast(`Освобождено ${(freed / 1048576).toFixed(1)} MB`);
+    } catch (e) {
+      toast(`Ошибка: ${e}`);
+    }
   });
-  el("save-endpoint").addEventListener("click", async () => {
-    await setSetting("update_endpoint", el("update-endpoint").value.trim());
-    alert("Endpoint сохранён");
+  el("cache-drop").addEventListener("click", async () => {
+    if (!confirm("Удалить весь кэш?")) return;
+    await invoke("cache_clear");
+    state.cacheMeta.clear();
+    await refreshCacheIndex();
+    renderSettings();
+    toast("Кэш очищен");
   });
+  el("open-logs").addEventListener("click", () => invoke("open_logs").catch((e) => toast(String(e))));
+  el("reauth").addEventListener("click", () => showLogin());
+  el("logout2").addEventListener("click", doLogout);
+  invoke("app_version")
+    .then((version) => {
+      const node = el("app-version");
+      if (node) node.textContent = version;
+    })
+    .catch(() => {});
+  loadGithubProfile();
 }
 
 async function doLogout() {
@@ -1031,22 +1177,63 @@ function displayTrack(t) {
   el("cover").style.visibility = t.cover ? "visible" : "hidden";
 }
 
-async function restoreQueue() {
+function playbackSnapshot() {
+  return {
+    queue: state.queue,
+    index: state.index,
+    position: audio.currentTime || 0,
+    repeat: state.repeat,
+    shuffle: state.shuffle,
+    volume: audio.volume,
+    updated: Date.now(),
+  };
+}
+
+async function savePlayback() {
+  if (state.settings.save_position === "0") return;
+  try {
+    await invoke("playback_save", { data: JSON.stringify(playbackSnapshot()) });
+  } catch {}
+}
+
+function schedulePlaybackSave() {
+  if (state.settings.save_position === "0") return;
+  clearTimeout(state.saveTimer);
+  state.saveTimer = setTimeout(savePlayback, 500);
+}
+
+async function restorePlayback() {
   if (!state.token) return;
   try {
-    const items = await invoke("queue_load");
-    if (!items.length) return;
-    const audios = items.map((i) => `${i.owner_id}_${i.id}`).join(",");
-    const res = await invoke("vk_audio_method", { method: "audio.getById", params: { audios } });
-    const list = (res.items || []).map(normTrack);
-    if (!list.length) return;
-    state.queue = list;
-    let idx = Number(state.settings.queue_index || 0);
-    if (!Number.isFinite(idx) || idx < 0 || idx >= list.length) idx = 0;
-    state.index = idx;
-    displayTrack(list[idx]);
+    const raw = await invoke("playback_load");
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (!saved || !Array.isArray(saved.queue) || !saved.queue.length) return;
+    state.queue = saved.queue;
+    let index = Number(saved.index);
+    if (!Number.isFinite(index) || index < 0 || index >= state.queue.length) index = 0;
+    state.index = index;
+    state.repeat = saved.repeat === "track" || saved.repeat === "all" ? saved.repeat : "off";
+    state.shuffle = !!saved.shuffle;
+    if (typeof saved.volume === "number") {
+      audio.volume = Math.min(1, Math.max(0, saved.volume));
+      el("volume").value = String(Math.round(audio.volume * 100));
+      audio.muted = false;
+      updateMuteIcon();
+    }
+    state.resumePosition = Number(saved.position) || 0;
+    displayTrack(state.queue[index]);
+    const repeatIcon = el("repeat").querySelector("use");
+    if (repeatIcon) repeatIcon.setAttribute("href", state.repeat === "track" ? "#i-repeat-one" : "#i-repeat");
+    el("repeat").classList.toggle("on", state.repeat !== "off");
+    el("shuffle").classList.toggle("on", state.shuffle);
+    setPlayingIcon();
+    if (!el("now-view").classList.contains("hidden")) {
+      renderNowView();
+      loadNowLyrics();
+    }
   } catch (e) {
-    console.warn("queue restore failed", e);
+    console.warn("playback restore failed", e);
   }
 }
 
@@ -1058,6 +1245,8 @@ function playCurrent() {
   stopHls();
   const src = t.local_id ? `http://vkxfile.localhost/${t.local_id}` : cached ? mediaUrl(key) : t.url;
   const hlsUrl = t.local_id || cached ? "" : t.hls;
+  const resume = state.resumePosition;
+  state.resumePosition = 0;
   displayTrack(t);
   if (!el("now-view").classList.contains("hidden")) {
     renderNowView();
@@ -1079,9 +1268,15 @@ function playCurrent() {
     audio.src = src || hlsUrl;
     audio.play().catch((e) => console.warn("play failed", e));
   }
+  if (resume > 0) {
+    const apply = () => {
+      if (audio.duration) audio.currentTime = Math.min(resume, Math.max(0, audio.duration - 1));
+    };
+    if (audio.readyState >= 1) apply();
+    else audio.addEventListener("loadedmetadata", apply, { once: true });
+  }
   renderActiveRow();
-  invoke("queue_save", { items: state.queue.map((x) => ({ id: x.id, owner_id: x.owner_id })) }).catch(() => {});
-  invoke("settings_set", { key: "queue_index", value: String(state.index) }).catch(() => {});
+  schedulePlaybackSave();
 }
 
 function renderActiveRow() {
@@ -1216,16 +1411,21 @@ function bind() {
   el("shuffle").addEventListener("click", () => {
     state.shuffle = !state.shuffle;
     el("shuffle").classList.toggle("on", state.shuffle);
+    schedulePlaybackSave();
   });
   el("repeat").addEventListener("click", () => {
     state.repeat = state.repeat === "off" ? "all" : state.repeat === "all" ? "track" : "off";
     const icon = el("repeat").querySelector("use");
     if (icon) icon.setAttribute("href", state.repeat === "track" ? "#i-repeat-one" : "#i-repeat");
     el("repeat").classList.toggle("on", state.repeat !== "off");
+    schedulePlaybackSave();
   });
 
   audio.addEventListener("play", setPlayingIcon);
-  audio.addEventListener("pause", setPlayingIcon);
+  audio.addEventListener("pause", () => {
+    setPlayingIcon();
+    savePlayback();
+  });
   audio.addEventListener("ended", () => next(true));
   audio.addEventListener("loadedmetadata", () => (el("dur").textContent = fmtTime(audio.duration)));
   audio.addEventListener("timeupdate", () => {
@@ -1238,11 +1438,13 @@ function bind() {
   });
   el("seek").addEventListener("input", () => {
     if (audio.duration) audio.currentTime = (Number(el("seek").value) / 1000) * audio.duration;
+    schedulePlaybackSave();
   });
   el("volume").addEventListener("input", () => {
     audio.volume = Number(el("volume").value) / 100;
     audio.muted = false;
     updateMuteIcon();
+    schedulePlaybackSave();
   });
   audio.volume = Number(el("volume").value) / 100;
   el("mute").addEventListener("click", () => {
@@ -1277,6 +1479,7 @@ function bind() {
   );
   if (window.__TAURI__ && window.__TAURI__.event) {
     window.__TAURI__.event.listen("tray-play", () => el("play").click());
+    window.__TAURI__.event.listen("app-save", () => savePlayback());
   }
   el("cover").addEventListener("click", openNowView);
   el("now-close").addEventListener("click", closeNowView);

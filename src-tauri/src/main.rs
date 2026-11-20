@@ -1,8 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,6 +15,7 @@ use tauri::{Emitter, Manager, State};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::WindowEvent;
+use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_updater::UpdaterExt;
 
 const API_VERSION: &str = "5.272";
@@ -28,6 +30,7 @@ struct AppState {
     db: Mutex<Connection>,
     http: reqwest::Client,
     cache_dir: PathBuf,
+    close_to_tray: AtomicBool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -67,7 +70,11 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
          CREATE TABLE IF NOT EXISTS queue(pos INTEGER PRIMARY KEY, id INTEGER NOT NULL, owner_id INTEGER NOT NULL);
          CREATE TABLE IF NOT EXISTS cache(track_key TEXT PRIMARY KEY, path TEXT NOT NULL, size INTEGER NOT NULL, created_at INTEGER NOT NULL);
          CREATE TABLE IF NOT EXISTS library(id INTEGER NOT NULL, owner_id INTEGER NOT NULL, title TEXT, artist TEXT, duration INTEGER, saved_at INTEGER, PRIMARY KEY(id, owner_id));
-         CREATE TABLE IF NOT EXISTS local_tracks(id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE, title TEXT NOT NULL, artist TEXT NOT NULL, duration INTEGER NOT NULL DEFAULT 0, added_at INTEGER NOT NULL);",
+         CREATE TABLE IF NOT EXISTS local_tracks(id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE, title TEXT NOT NULL, artist TEXT NOT NULL, duration INTEGER NOT NULL DEFAULT 0, added_at INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS playback(id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL, updated_at INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS cache_meta(track_key TEXT PRIMARY KEY, json TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS idx_cache_created ON cache(created_at);
+         PRAGMA user_version=2;",
     )
 }
 
@@ -999,6 +1006,8 @@ fn cache_delete(state: State<'_, AppState>, key: String) -> Result<(), String> {
     }
     conn.execute("DELETE FROM cache WHERE track_key=?1", params![key])
         .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM cache_meta WHERE track_key=?1", params![key])
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1015,6 +1024,7 @@ fn cache_clear(state: State<'_, AppState>) -> Result<(), String> {
         let _ = std::fs::remove_file(p);
     }
     conn.execute("DELETE FROM cache", []).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM cache_meta", []).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1158,8 +1168,194 @@ async fn update_install(
     }
 }
 
+fn logs_dir() -> PathBuf {
+    std::env::var("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("dev.vkx.desktop")
+        .join("logs")
+}
+
+fn log_line(message: &str) {
+    let dir = logs_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("app.log");
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > 5 * 1024 * 1024 {
+            let _ = std::fs::rename(&path, dir.join("app.log.1"));
+        }
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(file, "[{}] {}", now_ts(), message);
+    }
+}
+
+fn init_logging() {
+    std::panic::set_hook(Box::new(|info| {
+        log_line(&format!("PANIC: {info}"));
+    }));
+    log_line("app started");
+}
+
+#[tauri::command]
+fn app_version(app: tauri::AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+#[tauri::command]
+fn client_log(message: String) {
+    log_line(&format!("frontend: {message}"));
+}
+
+#[tauri::command]
+fn open_logs() -> Result<(), String> {
+    let dir = logs_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::process::Command::new("explorer")
+        .arg(dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn playback_save(state: State<'_, AppState>, data: String) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|_| "db lock".to_string())?;
+    conn.execute(
+        "INSERT INTO playback(id,state,updated_at) VALUES(1,?1,?2)
+         ON CONFLICT(id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
+        params![data, now_ts()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn playback_load(state: State<'_, AppState>) -> Option<String> {
+    let conn = state.db.lock().ok()?;
+    conn.query_row("SELECT state FROM playback WHERE id=1", [], |r| r.get(0))
+        .ok()
+}
+
+#[tauri::command]
+fn cache_meta_set(state: State<'_, AppState>, key: String, json: String) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|_| "db lock".to_string())?;
+    conn.execute(
+        "INSERT INTO cache_meta(track_key,json) VALUES(?1,?2)
+         ON CONFLICT(track_key) DO UPDATE SET json=excluded.json",
+        params![key, json],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn cache_meta_all(state: State<'_, AppState>) -> Result<Vec<(String, String)>, String> {
+    let conn = state.db.lock().map_err(|_| "db lock".to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT track_key,json FROM cache_meta")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn cache_cleanup(state: State<'_, AppState>) -> Result<i64, String> {
+    let mut freed = 0i64;
+    let mut valid = std::collections::HashSet::new();
+    let mut missing = Vec::new();
+    {
+        let conn = state.db.lock().map_err(|_| "db lock".to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT track_key,path FROM cache")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?;
+        for row in rows.flatten() {
+            if std::path::Path::new(&row.1).exists() {
+                valid.insert(row.1);
+            } else {
+                missing.push(row.0);
+            }
+        }
+        for key in missing {
+            let _ = conn.execute("DELETE FROM cache WHERE track_key=?1", params![key]);
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(&state.cache_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let keep = path.to_string_lossy();
+            if path.is_file() && !valid.contains(keep.as_ref()) {
+                if let Ok(meta) = entry.metadata() {
+                    freed += meta.len() as i64;
+                }
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    Ok(freed)
+}
+
+#[tauri::command]
+async fn github_profile(state: State<'_, AppState>) -> Result<Value, String> {
+    let response = state
+        .http
+        .get("https://api.github.com/users/arcoad")
+        .header(reqwest::header::USER_AGENT, "VKX Desktop")
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| format!("github: {}", e.without_url()))?;
+    if !response.status().is_success() {
+        return Err(format!("github http {}", response.status()));
+    }
+    let body: Value = response.json().await.map_err(|e| e.to_string())?;
+    Ok(json!({
+        "login": body.get("login"),
+        "name": body.get("name"),
+        "avatar_url": body.get("avatar_url"),
+        "html_url": body.get("html_url"),
+        "bio": body.get("bio")
+    }))
+}
+
+#[tauri::command]
+fn autostart_set(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())
+    } else {
+        manager.disable().map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+fn autostart_get(app: tauri::AppHandle) -> Result<bool, String> {
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_close_to_tray(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    state.close_to_tray.store(enabled, Ordering::Relaxed);
+    let conn = state.db.lock().map_err(|_| "db lock".to_string())?;
+    db_set_setting(&conn, "close_to_tray", if enabled { "1" } else { "0" })
+        .map_err(|e| e.to_string())
+}
+
 fn main() {
+    init_logging();
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .register_uri_scheme_protocol("vkxcache", |ctx, request| {
             let app = ctx.app_handle();
@@ -1240,10 +1436,18 @@ fn main() {
                 .user_agent(USER_AGENT)
                 .timeout(std::time::Duration::from_secs(30))
                 .build()?;
+            let close_to_tray = db_get_setting(&conn, "close_to_tray")
+                .map(|v| v != "0")
+                .unwrap_or(true);
+            let start_minimized = db_get_setting(&conn, "start_minimized")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+            let minimized_arg = std::env::args().any(|a| a == "--minimized");
             app.manage(AppState {
                 db: Mutex::new(conn),
                 http,
                 cache_dir,
+                close_to_tray: AtomicBool::new(close_to_tray),
             });
 
             let show = MenuItem::with_id(app, "show", "Показать", true, None::<&str>)?;
@@ -1263,7 +1467,11 @@ fn main() {
                     "play" => {
                         let _ = app.emit("tray-play", ());
                     }
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        let _ = app.emit("app-save", ());
+                        std::thread::sleep(std::time::Duration::from_millis(150));
+                        app.exit(0);
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -1286,11 +1494,22 @@ fn main() {
             tray.build(app)?;
 
             if let Some(window) = app.get_webview_window("main") {
+                if start_minimized || minimized_arg {
+                    let _ = window.hide();
+                }
                 let w = window.clone();
+                let app_handle = app.handle().clone();
                 window.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = w.hide();
+                        let close_to_tray = app_handle
+                            .state::<AppState>()
+                            .close_to_tray
+                            .load(Ordering::Relaxed);
+                        if close_to_tray {
+                            let _ = app_handle.emit("app-save", ());
+                            api.prevent_close();
+                            let _ = w.hide();
+                        }
                     }
                 });
             }
@@ -1336,7 +1555,19 @@ fn main() {
             local_tracks,
             local_remove,
             update_check,
-            update_install
+            update_install,
+            playback_save,
+            playback_load,
+            cache_meta_set,
+            cache_meta_all,
+            cache_cleanup,
+            github_profile,
+            autostart_set,
+            autostart_get,
+            set_close_to_tray,
+            client_log,
+            open_logs,
+            app_version
         ])
         .run(tauri::generate_context!())
         .expect("vkx-desktop failed to start");
