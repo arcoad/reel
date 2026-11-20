@@ -310,12 +310,17 @@ function setViewChrome(view) {
   state.view = view;
   document.querySelectorAll(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   el("search-box").classList.toggle("hidden", view !== "search");
+  el("refresh").classList.toggle("hidden", view === "settings" || view === "search");
   const titles = { library: "Библиотека", search: "Поиск", playlists: "Плейлисты", cache: "Кэш", settings: "Настройки" };
   el("view-title").textContent = titles[view] || view;
 }
 
 async function openView(view) {
   setViewChrome(view);
+  const content = el("content");
+  content.classList.remove("view-in");
+  void content.offsetWidth;
+  content.classList.add("view-in");
   if (view === "library") return loadLibrary();
   if (view === "search") return renderSearchStub();
   if (view === "playlists") return loadPlaylists();
@@ -323,18 +328,26 @@ async function openView(view) {
   if (view === "settings") return renderSettings();
 }
 
+function coverBox(src, name, cls) {
+  const letter = esc(((name || "?").trim()[0] || "?").toUpperCase());
+  const img = src ? `<img class="cover-img" src="${esc(src)}" alt="" data-name="${esc(name)}" />` : "";
+  return `<div class="${cls} ${src ? "" : "cover-missing"}" data-letter="${letter}" data-name="${esc(name)}">${img}</div>`;
+}
+
 function trackRow(t, i, list) {
   const isActive = state.queue[state.index] && trackKey(state.queue[state.index]) === trackKey(t);
   const cached = state.cache.has(trackKey(t));
   const inLib = state.libraryKeys.has(trackKey(t));
-  return `<div class="track ${isActive ? "active" : ""}" data-idx="${i}">
+  return `<div class="track has-cover ${isActive ? "active" : ""}" data-idx="${i}">
     <div class="idx">${i + 1}</div>
+    ${coverBox(t.cover, t.title, "tcover")}
     <div>
       <div class="title">${esc(t.title)}${t.explicit ? ' <span class="pill">E</span>' : ""}</div>
       <div class="sub">${esc(t.artist)}${cached ? ' • <span style="color:var(--accent-2)">кэш</span>' : ""}</div>
     </div>
     <div class="time">${fmtTime(t.duration)}</div>
     <div class="actions">
+      <button class="ghost" data-act="copy">Ссылка</button>
       <button class="ghost" data-act="cache">Кэш</button>
       <button class="ghost" data-act="like">${inLib ? "Убрать" : "В библиотеку"}</button>
     </div>
@@ -353,6 +366,7 @@ function bindTracks(container, list) {
       btn.addEventListener("click", async (e) => {
         e.stopPropagation();
         const t = list[idx];
+        if (btn.dataset.act === "copy") await copyTrack(t);
         if (btn.dataset.act === "cache") await cacheTrack(t);
         if (btn.dataset.act === "like") await likeTrack(t);
       });
@@ -524,8 +538,66 @@ function playLocal(i) {
   playCurrent();
 }
 
+function searchHistory() {
+  try {
+    const list = JSON.parse(state.settings.search_history || "[]");
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberSearch(q) {
+  const list = [q, ...searchHistory().filter((x) => x !== q)].slice(0, 8);
+  state.settings.search_history = JSON.stringify(list);
+  invoke("settings_set", { key: "search_history", value: state.settings.search_history }).catch(() => {});
+}
+
+function toast(message) {
+  const box = el("toasts");
+  if (!box) return;
+  const item = document.createElement("div");
+  item.className = "toast";
+  item.textContent = message;
+  box.appendChild(item);
+  setTimeout(() => item.remove(), 2600);
+}
+
+async function copyTrack(t) {
+  const url = `https://vk.com/audio${t.owner_id}_${t.id}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    toast("Ссылка скопирована");
+    return;
+  } catch {}
+  try {
+    const area = document.createElement("textarea");
+    area.value = url;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+    toast("Ссылка скопирована");
+  } catch {
+    toast("Не удалось скопировать ссылку");
+  }
+}
+
 function renderSearchStub() {
-  el("content").innerHTML = `<div class="empty">Введи запрос и нажми «Найти».</div>`;
+  const history = searchHistory();
+  el("content").innerHTML = history.length
+    ? `<div class="section-title">Недавние запросы</div><div class="hist-chips">` +
+      history.map((q, i) => `<button class="ghost hist-chip" data-hist="${i}">${esc(q)}</button>`).join("") +
+      `</div><p class="hint" style="margin-top:16px">Введи запрос, чтобы найти треки, плейлисты и исполнителей.</p>`
+    : `<div class="empty">Введи запрос и нажми «Найти».</div>`;
+  el("content").querySelectorAll("[data-hist]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      el("search-input").value = history[Number(btn.dataset.hist)];
+      doSearch();
+    });
+  });
 }
 
 async function doSearch() {
@@ -539,6 +611,7 @@ async function doSearch() {
     const total = res.count ?? list.length;
     el("content").innerHTML = `<div class="section-title">Найдено: ${esc(total)} • показано ${list.length}</div>` + (list.length ? list.map((t, i) => trackRow(t, i, list)).join("") : `<div class="empty">Ничего не найдено</div>`);
     bindTracks(el("content"), list);
+    rememberSearch(q);
   } catch (e) {
     el("content").innerHTML = `<div class="empty">Ошибка: ${esc(String(e))}</div>`;
   }
@@ -554,7 +627,10 @@ function playlistGrid(list) {
   return (
     `<div class="playlist-grid">` +
     list
-      .map((p, i) => `<div class="playlist-card" data-pi="${i}"><img src="${esc(playlistPhoto(p))}" alt=""/><div><div class="name">${esc(p.title)}</div><div class="meta">${esc(p.count || 0)} треков</div></div></div>`)
+      .map(
+        (p, i) =>
+          `<div class="playlist-card" data-pi="${i}">${coverBox(playlistPhoto(p), p.title, "pcover")}<div><div class="name">${esc(p.title)}</div><div class="meta">${esc(p.count || 0)} треков</div></div></div>`
+      )
       .join("") +
     `</div>`
   );
@@ -684,13 +760,13 @@ async function renderCache() {
 
 function renderSettings() {
   const s = state.settings;
-  el("content").innerHTML = `
+  el("content").innerHTML = `<div class="settings">
     <div class="section-title">Внешний вид</div>
     <div class="track"><div class="idx">T</div><div><div class="title">Тема</div><div class="sub">Оформление интерфейса</div></div><div></div>
       <select id="theme-select">${themes.map((t) => `<option value="${t}" ${t === (s.theme || "dark") ? "selected" : ""}>${t}</option>`).join("")}</select>
     </div>
     <div class="track"><div class="idx">A</div><div><div class="title">Акцент</div><div class="sub">Цвет кнопок и выделения</div></div><div></div>
-      <input id="accent-input" type="color" value="${esc(s.accent || "#7c5cff")}" />
+      <input id="accent-input" type="color" value="${esc(s.accent || "#6f9dff")}" />
     </div>
     <div class="section-title">Аккаунт</div>
     <div class="track"><div class="idx">ID</div><div><div class="title">client_id для OAuth</div><div class="sub">Используется кнопкой «Открыть VK OAuth»</div></div><div></div>
@@ -712,7 +788,7 @@ function renderSettings() {
       <div class="row"><input id="update-endpoint" value="${esc(s.update_endpoint || "")}" placeholder="https://github.com/OWNER/REPO/releases/latest/download/latest.json" /><button id="save-endpoint" class="ghost">Сохранить</button></div>
     </div>
     <div class="section-title">О приложении</div>
-    <div class="track"><div class="idx">i</div><div><div class="title">VKX Desktop <span id="app-version">0.1.4</span></div><div class="sub">Rust + Tauri 2 · порт музыкального контура VKX 9.0</div></div><div></div><div class="muted small">SPEC.md</div></div>`;
+    <div class="track"><div class="idx">i</div><div><div class="title">VKX Desktop <span id="app-version">0.1.5</span></div><div class="sub">Rust + Tauri 2 · порт музыкального контура VKX 9.0</div></div><div></div><div class="muted small">SPEC.md</div></div></div>`;
   el("theme-select").addEventListener("change", (e) => setSetting("theme", e.target.value));
   el("accent-input").addEventListener("input", (e) => setSetting("accent", e.target.value));
   el("save-client").addEventListener("click", async () => {
@@ -775,6 +851,14 @@ function renderEq() {
 
 function applyPreset() {
   renderEq();
+}
+
+function updateMuteIcon() {
+  const button = el("mute");
+  if (!button) return;
+  const icon = button.querySelector("use");
+  if (icon) icon.setAttribute("href", audio.muted ? "#i-volume-off" : "#i-volume");
+  button.classList.toggle("on", audio.muted);
 }
 
 function setPlayingIcon() {
@@ -996,8 +1080,17 @@ function bind() {
   el("seek").addEventListener("input", () => {
     if (audio.duration) audio.currentTime = (Number(el("seek").value) / 1000) * audio.duration;
   });
-  el("volume").addEventListener("input", () => (audio.volume = Number(el("volume").value) / 100));
+  el("volume").addEventListener("input", () => {
+    audio.volume = Number(el("volume").value) / 100;
+    audio.muted = false;
+    updateMuteIcon();
+  });
   audio.volume = Number(el("volume").value) / 100;
+  el("mute").addEventListener("click", () => {
+    audio.muted = !audio.muted;
+    updateMuteIcon();
+  });
+  updateMuteIcon();
 
   el("queue-btn").addEventListener("click", () => {
     renderQueue();
@@ -1008,6 +1101,21 @@ function bind() {
     renderEq();
     el("eq-modal").showModal();
   });
+  document.addEventListener(
+    "error",
+    (e) => {
+      const img = e.target;
+      if (!(img instanceof HTMLImageElement) || !img.classList.contains("cover-img")) return;
+      const box = img.parentElement;
+      const name = img.dataset.name || "?";
+      img.remove();
+      if (box) {
+        box.classList.add("cover-missing");
+        box.dataset.letter = (name.trim()[0] || "?").toUpperCase();
+      }
+    },
+    true
+  );
   el("update-now").addEventListener("click", installUpdate);
   el("update-later").addEventListener("click", async () => {
     if (state.update && state.update.version) await setSetting("skipped_update", state.update.version);

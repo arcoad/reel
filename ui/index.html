@@ -18,10 +18,11 @@
       <symbol id="i-queue" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h9M17 17v4M17 21h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
       <symbol id="i-lyrics" viewBox="0 0 24 24"><path d="M5 4h14v16H7a2 2 0 01-2-2zM9 9h6M9 13h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-eq" viewBox="0 0 24 24"><path d="M5 20V10M10 20V4M15 20v-7M20 20V8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-volume" viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M17 8.5a5 5 0 010 7M19.5 6a8 8 0 010 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+      <symbol id="i-volume-off" viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M17 9l5 6M22 9l-5 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 16l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
       <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v12H3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
       <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V6l10-2v12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="7" cy="18" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="17" cy="16" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
-      <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 2v3M12 19v3M4.9 4.9L7 7M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
       <symbol id="i-logout" viewBox="0 0 24 24"><path d="M15 4h4a1 1 0 011 1v14a1 1 0 01-1 1h-4M10 17l5-5-5-5M15 12H3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     </svg>
 
@@ -91,7 +92,7 @@
           <div class="nav-group">
             <div class="nav-caption">Система</div>
             <button data-view="settings" class="nav" title="Настройки (4)">
-              <svg class="i"><use href="#i-settings"></use></svg><span>Настройки</span><kbd>4</kbd>
+              <svg class="i"><use href="#i-eq"></use></svg><span>Настройки</span><kbd>4</kbd>
             </button>
           </div>
         </nav>
@@ -150,6 +151,7 @@
           <button id="lyrics-btn" class="ghost" title="Текст"><svg class="i"><use href="#i-lyrics"></use></svg>Текст</button>
           <button id="eq-btn" class="ghost" title="Эквалайзер"><svg class="i"><use href="#i-eq"></use></svg>EQ</button>
           <button id="queue-btn" class="ghost" title="Очередь"><svg class="i"><use href="#i-queue"></use></svg>Очередь</button>
+          <button id="mute" class="icon small" title="Звук"><svg class="i"><use href="#i-volume"></use></svg></button>
           <input id="volume" type="range" min="0" max="100" value="90" aria-label="Громкость" />
         </div>
       </footer>
@@ -190,6 +192,8 @@
         <button id="update-now" class="primary">Обновить</button>
       </div>
     </dialog>
+
+    <div id="toasts" class="toasts"></div>
 
     <audio id="audio" preload="metadata"></audio>
     <script src="vendor/hls.min.js"></script>
