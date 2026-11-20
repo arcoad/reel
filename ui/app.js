@@ -252,8 +252,11 @@ function showUpdatePrompt() {
   if (!modal.open) modal.showModal();
 }
 
+let lastUpdateCheck = 0;
+
 async function checkUpdates(manual = false) {
   const st = el("update-status");
+  lastUpdateCheck = Date.now();
   if (st) st.textContent = "Проверяю…";
   try {
     const r = await invoke("update_check");
@@ -295,6 +298,13 @@ async function boot() {
   else showLogin();
   await refreshCacheIndex();
   checkUpdates().catch(() => {});
+  window.addEventListener("focus", () => {
+    if (document.hidden) return;
+    if (Date.now() - lastUpdateCheck < 10 * 60 * 1000) return;
+    const modal = el("update-modal");
+    if (modal && modal.open) return;
+    checkUpdates(false);
+  });
 }
 
 async function refreshCacheIndex() {
@@ -413,6 +423,46 @@ async function loadLocalTracks() {
   }
 }
 
+function ownPlaylists(list, userId) {
+  const id = Number(userId);
+  return (list || []).filter((p) => {
+    const owner = Number(p.owner_id);
+    const pid = Number(p.id);
+    return Number.isFinite(id) && owner === id && pid > 0 && p.type !== "generated" && !p.followed;
+  });
+}
+
+function librarySection(sections) {
+  return (
+    (sections || []).find((s) => /section=all/.test(String(s.url || ""))) ||
+    (sections || []).find((s) => /моя музыка|my music/i.test(String(s.title || ""))) ||
+    null
+  );
+}
+
+async function loadMyMusic(sectionId) {
+  const seen = new Set();
+  const tracks = [];
+  let start = null;
+  for (let page = 0; page < 50; page++) {
+    const res = await invoke("catalog_get_section", { sectionId, startFrom: start });
+    const section = res.section || {};
+    const block = (section.blocks || []).find((b) => (b.audios_ids || []).length);
+    const pageTracks = orderedByBlocks((res.audios || []).map(normTrack), section.blocks || []);
+    for (const t of pageTracks) {
+      const key = trackKey(t);
+      if (!seen.has(key)) {
+        seen.add(key);
+        tracks.push(t);
+      }
+    }
+    const next = section.next_from || (block && block.next_from) || null;
+    if (!next || next === start || !pageTracks.length) break;
+    start = next;
+  }
+  return tracks;
+}
+
 async function loadLibrary() {
   state.loading = true;
   state.section = null;
@@ -424,9 +474,12 @@ async function loadLibrary() {
   let vkError = "";
   try {
     const res = await invoke("catalog_get_audio", { ownerId: state.user?.id ?? null });
-    vkList = (res.audios || []).map(normTrack);
     sections = (res.catalog && res.catalog.sections) || [];
-    playlists = res.playlists || [];
+    playlists = ownPlaylists(res.playlists, state.user?.id);
+    const lib = librarySection(sections);
+    vkList = lib
+      ? await loadMyMusic(lib.id).catch(() => (res.audios || []).map(normTrack))
+      : (res.audios || []).map(normTrack);
   } catch (e) {
     vkError = vkHint(e);
   }
@@ -441,7 +494,7 @@ async function loadLibrary() {
       sections.map((s) => `<button class="ghost" data-section="${esc(s.id)}">${esc(s.title || s.id)}</button>`).join("") +
       `</div>`;
   if (playlists.length) html += `<div class="section-title">Плейлисты • ${playlists.length}</div>` + playlistGrid(playlists);
-  if (vkList.length) html += `<div class="section-title">VK • ${vkList.length}</div>` + vkList.map((t, i) => trackRow(t, i, vkList)).join("");
+  if (vkList.length) html += `<div class="section-title">Мои треки • ${vkList.length}</div>` + vkList.map((t, i) => trackRow(t, i, vkList)).join("");
   if (state.local.length) html += `<div class="section-title">Локальные файлы • ${state.local.length}</div>` + state.local.map((l, i) => localRow(l, i)).join("");
   if (!html) html = `<div class="empty">Пусто. Добавь папку с музыкой в Настройках.</div>`;
   el("content").innerHTML = html;
@@ -646,7 +699,7 @@ async function loadPlaylists() {
   el("content").innerHTML = `<div class="empty">Загрузка плейлистов…</div>`;
   try {
     const res = await invoke("catalog_get_audio", { ownerId: state.user?.id ?? null });
-    const list = res.playlists || [];
+    const list = ownPlaylists(res.playlists, state.user?.id);
     state.playlists = list;
     el("content").innerHTML = `<div class="section-title">Плейлисты • ${list.length}</div>` + (list.length ? playlistGrid(list) : `<div class="empty">Плейлистов нет</div>`);
     bindPlaylists(el("content"), list);
@@ -788,7 +841,7 @@ function renderSettings() {
       <div class="row"><input id="update-endpoint" value="${esc(s.update_endpoint || "")}" placeholder="https://github.com/OWNER/REPO/releases/latest/download/latest.json" /><button id="save-endpoint" class="ghost">Сохранить</button></div>
     </div>
     <div class="section-title">О приложении</div>
-    <div class="track"><div class="idx">i</div><div><div class="title">VKX Desktop <span id="app-version">0.1.5</span></div><div class="sub">Rust + Tauri 2 · порт музыкального контура VKX 9.0</div></div><div></div><div class="muted small">SPEC.md</div></div></div>`;
+    <div class="track"><div class="idx">i</div><div><div class="title">VKX Desktop <span id="app-version">0.1.6</span></div><div class="sub">Rust + Tauri 2 · порт музыкального контура VKX 9.0</div></div><div></div><div class="muted small">SPEC.md</div></div></div>`;
   el("theme-select").addEventListener("change", (e) => setSetting("theme", e.target.value));
   el("accent-input").addEventListener("input", (e) => setSetting("accent", e.target.value));
   el("save-client").addEventListener("click", async () => {
