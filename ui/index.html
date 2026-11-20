@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VKX Desktop</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <svg class="sprite" aria-hidden="true">
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="i-prev" viewBox="0 0 24 24"><path d="M6 5v14M19 6l-9 6 9 6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+      <symbol id="i-next" viewBox="0 0 24 24"><path d="M18 5v14M5 6l9 6-9 6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+      <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 4h4v4M4 20l16-16M16 20h4v-4M4 4l5 5M15 15l5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 3l3 3-3 3M4 12V9a3 3 0 013-3h13M7 21l-3-3 3-3M20 12v3a3 3 0 01-3 3H4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-repeat-one" viewBox="0 0 24 24"><path d="M17 3l3 3-3 3M4 12V9a3 3 0 013-3h13M7 21l-3-3 3-3M20 12v3a3 3 0 01-3 3H4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 15v-4l-1.5 1" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+      <symbol id="i-queue" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h9M17 17v4M17 21h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+      <symbol id="i-lyrics" viewBox="0 0 24 24"><path d="M5 4h14v16H7a2 2 0 01-2-2zM9 9h6M9 13h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-eq" viewBox="0 0 24 24"><path d="M5 20V10M10 20V4M15 20v-7M20 20V8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 16l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v12H3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+      <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V6l10-2v12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="7" cy="18" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="17" cy="16" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 2v3M12 19v3M4.9 4.9L7 7M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+      <symbol id="i-logout" viewBox="0 0 24 24"><path d="M15 4h4a1 1 0 011 1v14a1 1 0 01-1 1h-4M10 17l5-5-5-5M15 12H3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    </svg>
+
+    <div id="login" class="login hidden">
+      <div class="login-card">
+        <div class="brand">VKX <span>Desktop</span></div>
+        <p class="lead">Музыка VK на десктопе</p>
+
+        <button id="web-login" class="primary wide">Войти через VK</button>
+        <button id="check-login" class="secondary wide">Проверить вход</button>
+        <p class="hint">Откроется окно VK. Войди по номеру или паролю — если QR обновляется, он не сработает.</p>
+
+        <div class="cookie-block">
+          <button id="toggle-cookie" class="link">У меня уже есть cookie</button>
+          <div id="cookie-fields" class="cookie-fields hidden">
+            <label class="field"><span>p</span><input id="cookie-p" autocomplete="off" /></label>
+            <label class="field"><span>remixsid</span><input id="cookie-sid" autocomplete="off" /></label>
+            <button id="cookie-login" class="secondary">Войти по cookie</button>
+            <p class="hint">vk.ru → DevTools → Application → Cookies → https://vk.ru. Можно вставить всю строку Cookie в поле p</p>
+          </div>
+        </div>
+
+        <details class="legacy">
+          <summary>Другой способ: токен вручную</summary>
+          <div class="legacy-body">
+            <button id="oauth" class="link">Открыть форму OAuth</button>
+            <textarea id="token-input" rows="3" placeholder="https://oauth.vk.com/blank.html#access_token=…"></textarea>
+            <div class="inline">
+              <input id="client-id" placeholder="client_id (необязательно)" />
+              <button id="login-btn" class="secondary">Войти</button>
+            </div>
+          </div>
+        </details>
+
+        <p id="login-error" class="status"></p>
+      </div>
+    </div>
+
+    <div id="shell" class="shell hidden">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <div class="brand">VKX <span>Desktop</span></div>
+          <div class="brand-sub">Музыка VK на десктопе</div>
+        </div>
+
+        <nav class="nav-groups">
+          <div class="nav-group">
+            <div class="nav-caption">Медиа</div>
+            <button data-view="library" class="nav active" title="Библиотека (1)">
+              <svg class="i"><use href="#i-music"></use></svg><span>Библиотека</span><kbd>1</kbd>
+            </button>
+            <button data-view="search" class="nav" title="Поиск (/)">
+              <svg class="i"><use href="#i-search"></use></svg><span>Поиск</span><kbd>/</kbd>
+            </button>
+            <button data-view="playlists" class="nav" title="Плейлисты (2)">
+              <svg class="i"><use href="#i-queue"></use></svg><span>Плейлисты</span><kbd>2</kbd>
+            </button>
+          </div>
+
+          <div class="nav-group">
+            <div class="nav-caption">Офлайн</div>
+            <button data-view="cache" class="nav" title="Кэш (3)">
+              <svg class="i"><use href="#i-folder"></use></svg><span>Кэш</span><kbd>3</kbd>
+            </button>
+          </div>
+
+          <div class="nav-group">
+            <div class="nav-caption">Система</div>
+            <button data-view="settings" class="nav" title="Настройки (4)">
+              <svg class="i"><use href="#i-settings"></use></svg><span>Настройки</span><kbd>4</kbd>
+            </button>
+          </div>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="account">
+            <div id="user-avatar" class="avatar">?</div>
+            <div class="account-text">
+              <div id="user-name">Не выполнен вход</div>
+              <div class="account-sub">VK аккаунт</div>
+            </div>
+            <button id="logout" class="icon small" title="Выйти">
+              <svg class="i"><use href="#i-logout"></use></svg>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <h2 id="view-title">Библиотека</h2>
+          <div id="search-box" class="search hidden">
+            <input id="search-input" placeholder="Трек или исполнитель" />
+            <button id="search-btn" class="secondary">Найти</button>
+          </div>
+          <button id="refresh" class="ghost">Обновить</button>
+        </header>
+
+        <section id="content" class="content"></section>
+      </main>
+
+      <footer class="player">
+        <div class="now">
+          <img id="cover" alt="" />
+          <div class="now-text">
+            <div id="np-title">Ничего не играет</div>
+            <div id="np-artist" class="muted"></div>
+          </div>
+        </div>
+
+        <div class="controls">
+          <button id="shuffle" class="icon" aria-label="Перемешать"><svg class="i"><use href="#i-shuffle"></use></svg></button>
+          <button id="prev" class="icon" aria-label="Предыдущий"><svg class="i"><use href="#i-prev"></use></svg></button>
+          <button id="play" class="icon play" aria-label="Играть"><svg class="i"><use href="#i-play"></use></svg></button>
+          <button id="next" class="icon" aria-label="Следующий"><svg class="i"><use href="#i-next"></use></svg></button>
+          <button id="repeat" class="icon" aria-label="Повтор"><svg class="i"><use href="#i-repeat"></use></svg></button>
+        </div>
+
+        <div class="progress">
+          <span id="cur">0:00</span>
+          <input id="seek" type="range" min="0" max="1000" value="0" />
+          <span id="dur">0:00</span>
+        </div>
+
+        <div class="right-controls">
+          <button id="lyrics-btn" class="ghost" title="Текст"><svg class="i"><use href="#i-lyrics"></use></svg>Текст</button>
+          <button id="eq-btn" class="ghost" title="Эквалайзер"><svg class="i"><use href="#i-eq"></use></svg>EQ</button>
+          <button id="queue-btn" class="ghost" title="Очередь"><svg class="i"><use href="#i-queue"></use></svg>Очередь</button>
+          <input id="volume" type="range" min="0" max="100" value="90" aria-label="Громкость" />
+        </div>
+      </footer>
+    </div>
+
+    <dialog id="queue-modal">
+      <div class="dialog-head"><h3>Очередь</h3><button class="ghost" data-close>Закрыть</button></div>
+      <ol id="queue-list" class="dialog-list"></ol>
+    </dialog>
+
+    <dialog id="lyrics-modal">
+      <div class="dialog-head"><h3>Текст</h3><button class="ghost" data-close>Закрыть</button></div>
+      <pre id="lyrics-text" class="lyrics"></pre>
+    </dialog>
+
+    <dialog id="eq-modal">
+      <div class="dialog-head"><h3>Эквалайзер</h3><button class="ghost" data-close>Закрыть</button></div>
+      <div class="eq-presets">
+        <button data-preset="flat" class="ghost">Flat</button>
+        <button data-preset="bass" class="ghost">Bass</button>
+        <button data-preset="vocal" class="ghost">Vocal</button>
+        <button data-preset="rock" class="ghost">Rock</button>
+      </div>
+      <div id="eq-bands" class="eq-bands"></div>
+    </dialog>
+
+    <dialog id="update-modal">
+      <div class="dialog-head">
+        <h3 id="update-title">Обновление</h3>
+        <button class="ghost" data-close>Позже</button>
+      </div>
+      <div class="update-body">
+        <p class="muted small" id="update-sub"></p>
+        <div id="update-notes" class="update-notes"></div>
+      </div>
+      <div class="dialog-actions">
+        <button id="update-later" class="ghost">Позже</button>
+        <button id="update-now" class="primary">Обновить</button>
+      </div>
+    </dialog>
+
+    <audio id="audio" preload="metadata"></audio>
+    <script src="vendor/hls.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

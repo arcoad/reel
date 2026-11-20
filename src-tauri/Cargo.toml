@@ -1,0 +1,17 @@
+[package]
+name = "vkx-desktop"
+version = "0.1.4"
+edition = "2021"
+description = "VKX Desktop music player"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.43.0", features = ["bundled"] }
+futures-util = "0.3.34"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+tauri-plugin-updater = "2.14.1"
