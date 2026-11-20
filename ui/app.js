@@ -423,6 +423,16 @@ async function loadLocalTracks() {
   }
 }
 
+function inferUid(res) {
+  const sections = (res.catalog && res.catalog.sections) || [];
+  for (const section of sections) {
+    const match = String(section.url || "").match(/\/audios(\d+)/);
+    if (match) return Number(match[1]);
+  }
+  const generated = (res.playlists || []).find((p) => p.type === "generated" || Number(p.id) < 0);
+  return generated && generated.owner_id ? Number(generated.owner_id) : null;
+}
+
 function ownPlaylists(list, userId) {
   const id = Number(userId);
   return (list || []).filter((p) => {
@@ -440,6 +450,27 @@ function librarySection(sections) {
   );
 }
 
+function orderedStrict(list, blocks) {
+  const ids = [];
+  for (const block of blocks || []) for (const id of block.audios_ids || []) ids.push(String(id));
+  if (!ids.length) return list;
+  const byKey = new Map();
+  for (const track of list) {
+    byKey.set(`${track.id}_${track.owner_id}`, track);
+    byKey.set(`${track.owner_id}_${track.id}`, track);
+  }
+  const seen = new Set();
+  const out = [];
+  for (const id of ids) {
+    const track = byKey.get(id);
+    if (track && !seen.has(track)) {
+      seen.add(track);
+      out.push(track);
+    }
+  }
+  return out;
+}
+
 async function loadMyMusic(sectionId) {
   const seen = new Set();
   const tracks = [];
@@ -448,7 +479,7 @@ async function loadMyMusic(sectionId) {
     const res = await invoke("catalog_get_section", { sectionId, startFrom: start });
     const section = res.section || {};
     const block = (section.blocks || []).find((b) => (b.audios_ids || []).length);
-    const pageTracks = orderedByBlocks((res.audios || []).map(normTrack), section.blocks || []);
+    const pageTracks = orderedStrict((res.audios || []).map(normTrack), section.blocks || []);
     for (const t of pageTracks) {
       const key = trackKey(t);
       if (!seen.has(key)) {
@@ -475,11 +506,13 @@ async function loadLibrary() {
   try {
     const res = await invoke("catalog_get_audio", { ownerId: state.user?.id ?? null });
     sections = (res.catalog && res.catalog.sections) || [];
+    if (!state.user?.id) {
+      const inferred = inferUid(res);
+      if (inferred) state.user = { ...(state.user || {}), id: inferred };
+    }
     playlists = ownPlaylists(res.playlists, state.user?.id);
     const lib = librarySection(sections);
-    vkList = lib
-      ? await loadMyMusic(lib.id).catch(() => (res.audios || []).map(normTrack))
-      : (res.audios || []).map(normTrack);
+    vkList = lib ? await loadMyMusic(lib.id) : [];
   } catch (e) {
     vkError = vkHint(e);
   }
@@ -699,6 +732,10 @@ async function loadPlaylists() {
   el("content").innerHTML = `<div class="empty">Загрузка плейлистов…</div>`;
   try {
     const res = await invoke("catalog_get_audio", { ownerId: state.user?.id ?? null });
+    if (!state.user?.id) {
+      const inferred = inferUid(res);
+      if (inferred) state.user = { ...(state.user || {}), id: inferred };
+    }
     const list = ownPlaylists(res.playlists, state.user?.id);
     state.playlists = list;
     el("content").innerHTML = `<div class="section-title">Плейлисты • ${list.length}</div>` + (list.length ? playlistGrid(list) : `<div class="empty">Плейлистов нет</div>`);
@@ -841,7 +878,7 @@ function renderSettings() {
       <div class="row"><input id="update-endpoint" value="${esc(s.update_endpoint || "")}" placeholder="https://github.com/OWNER/REPO/releases/latest/download/latest.json" /><button id="save-endpoint" class="ghost">Сохранить</button></div>
     </div>
     <div class="section-title">О приложении</div>
-    <div class="track"><div class="idx">i</div><div><div class="title">VKX Desktop <span id="app-version">0.1.6</span></div><div class="sub">Rust + Tauri 2 · порт музыкального контура VKX 9.0</div></div><div></div><div class="muted small">SPEC.md</div></div></div>`;
+    <div class="track"><div class="idx">i</div><div><div class="title">VKX Desktop <span id="app-version">0.1.7</span></div><div class="sub">Rust + Tauri 2 · порт музыкального контура VKX 9.0</div></div><div></div><div class="muted small">SPEC.md</div></div></div>`;
   el("theme-select").addEventListener("change", (e) => setSetting("theme", e.target.value));
   el("accent-input").addEventListener("input", (e) => setSetting("accent", e.target.value));
   el("save-client").addEventListener("click", async () => {
@@ -917,6 +954,67 @@ function updateMuteIcon() {
 function setPlayingIcon() {
   const icon = el("play").querySelector("use");
   if (icon) icon.setAttribute("href", audio.paused ? "#i-play" : "#i-pause");
+  updateNowPlayIcon();
+}
+
+function updateNowPlayIcon() {
+  const icon = el("now-play").querySelector("use");
+  if (icon) icon.setAttribute("href", audio.paused ? "#i-play" : "#i-pause");
+}
+
+function renderNowView() {
+  const track = state.queue[state.index];
+  if (!track) return;
+  el("now-title").textContent = track.title;
+  el("now-artist").textContent = track.artist;
+  const cover = el("now-cover");
+  cover.src = track.cover || "";
+  cover.style.visibility = track.cover ? "visible" : "hidden";
+  el("now-bg").style.backgroundImage = track.cover ? `url("${track.cover}")` : "none";
+  el("now-cur").textContent = fmtTime(audio.currentTime);
+  el("now-dur").textContent = fmtTime(audio.duration || track.duration);
+  el("now-seek").value = audio.duration ? String(Math.round((audio.currentTime / audio.duration) * 1000)) : "0";
+  updateNowPlayIcon();
+}
+
+async function loadNowLyrics() {
+  const track = state.queue[state.index];
+  if (!track) return;
+  const view = el("now-view");
+  view.classList.remove("no-lyrics");
+  el("now-lyrics").textContent = "Загрузка…";
+  const key = trackKey(track);
+  let text = "";
+  if (track.lyrics_id) {
+    try {
+      const res = await invoke("lyrics", { lyricsId: Number(track.lyrics_id) });
+      text = (res && res.text) || "";
+    } catch {}
+  }
+  if (!text.trim()) {
+    try {
+      text = (await invoke("external_lyrics", { artist: track.artist, title: track.title })) || "";
+    } catch {}
+  }
+  const current = state.queue[state.index];
+  if (!current || trackKey(current) !== key) return;
+  if (text.trim()) {
+    el("now-lyrics").textContent = text;
+    view.classList.remove("no-lyrics");
+  } else {
+    view.classList.add("no-lyrics");
+  }
+}
+
+function openNowView() {
+  if (!state.queue[state.index]) return;
+  el("now-view").classList.remove("hidden");
+  renderNowView();
+  loadNowLyrics();
+}
+
+function closeNowView() {
+  el("now-view").classList.add("hidden");
 }
 
 function stopHls() {
@@ -961,6 +1059,10 @@ function playCurrent() {
   const src = t.local_id ? `http://vkxfile.localhost/${t.local_id}` : cached ? mediaUrl(key) : t.url;
   const hlsUrl = t.local_id || cached ? "" : t.hls;
   displayTrack(t);
+  if (!el("now-view").classList.contains("hidden")) {
+    renderNowView();
+    loadNowLyrics();
+  }
   if (hlsUrl && window.Hls && window.Hls.isSupported()) {
     state.hls = new Hls({ enableWorker: true });
     state.hls.loadSource(hlsUrl);
@@ -1129,6 +1231,10 @@ function bind() {
   audio.addEventListener("timeupdate", () => {
     el("cur").textContent = fmtTime(audio.currentTime);
     if (audio.duration) el("seek").value = String(Math.round((audio.currentTime / audio.duration) * 1000));
+    if (!el("now-view").classList.contains("hidden")) {
+      el("now-cur").textContent = fmtTime(audio.currentTime);
+      if (audio.duration) el("now-seek").value = String(Math.round((audio.currentTime / audio.duration) * 1000));
+    }
   });
   el("seek").addEventListener("input", () => {
     if (audio.duration) audio.currentTime = (Number(el("seek").value) / 1000) * audio.duration;
@@ -1169,6 +1275,17 @@ function bind() {
     },
     true
   );
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    window.__TAURI__.event.listen("tray-play", () => el("play").click());
+  }
+  el("cover").addEventListener("click", openNowView);
+  el("now-close").addEventListener("click", closeNowView);
+  el("now-play").addEventListener("click", () => el("play").click());
+  el("now-prev").addEventListener("click", prev);
+  el("now-next").addEventListener("click", () => next(false));
+  el("now-seek").addEventListener("input", () => {
+    if (audio.duration) audio.currentTime = (Number(el("now-seek").value) / 1000) * audio.duration;
+  });
   el("update-now").addEventListener("click", installUpdate);
   el("update-later").addEventListener("click", async () => {
     if (state.update && state.update.version) await setSetting("skipped_update", state.update.version);
@@ -1183,8 +1300,26 @@ function bind() {
       e.preventDefault();
       el("play").click();
     }
-    if (e.code === "ArrowRight" && e.shiftKey) next(false);
-    if (e.code === "ArrowLeft" && e.shiftKey) prev();
+    if (e.code === "ArrowRight") {
+      e.preventDefault();
+      if (audio.duration) audio.currentTime = Math.min(audio.duration, audio.currentTime + 5);
+    }
+    if (e.code === "ArrowLeft") {
+      e.preventDefault();
+      if (audio.duration) audio.currentTime = Math.max(0, audio.currentTime - 5);
+    }
+    if (e.code === "ArrowDown") {
+      e.preventDefault();
+      next(false);
+    }
+    if (e.code === "ArrowUp") {
+      e.preventDefault();
+      prev();
+    }
+    if (e.code === "Escape") {
+      closeNowView();
+      document.querySelectorAll("dialog[open]").forEach((d) => d.close());
+    }
     if (e.code === "Slash") {
       e.preventDefault();
       openView("search");

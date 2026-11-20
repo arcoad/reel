@@ -22,6 +22,12 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: "src-tauri -> target"
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Enable sccache
+        shell: bash
+        run: |
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
       - name: Install Tauri CLI
         run: npm i -g @tauri-apps/cli@2
       - name: Build release notes

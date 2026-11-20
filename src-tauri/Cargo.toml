@@ -1,6 +1,6 @@
 [package]
 name = "vkx-desktop"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "VKX Desktop music player"
 
@@ -8,7 +8,7 @@ description = "VKX Desktop music player"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.43.0", features = ["bundled"] }

@@ -10,7 +10,10 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tauri::http::{header, Request, Response, StatusCode};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::WindowEvent;
 use tauri_plugin_updater::UpdaterExt;
 
 const API_VERSION: &str = "5.272";
@@ -582,6 +585,55 @@ async fn lyrics(state: State<'_, AppState>, lyrics_id: i64) -> Result<Value, Str
     let mut p = Map::new();
     p.insert("lyrics_id".into(), json!(lyrics_id));
     vk_call(&state, "audio.getLyrics", p).await
+}
+
+fn strip_lrc(input: &str) -> String {
+    input
+        .lines()
+        .map(|line| match line.find(']') {
+            Some(index) => line[index + 1..].trim_start(),
+            None => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tauri::command]
+async fn external_lyrics(
+    state: State<'_, AppState>,
+    artist: String,
+    title: String,
+) -> Result<Option<String>, String> {
+    if artist.trim().is_empty() || title.trim().is_empty() {
+        return Ok(None);
+    }
+    let response = state
+        .http
+        .get("https://lrclib.net/api/get")
+        .query(&[("artist_name", artist.as_str()), ("track_name", title.as_str())])
+        .header(
+            reqwest::header::USER_AGENT,
+            "VKX Desktop (https://github.com/arcoad/vkx-desktop)",
+        )
+        .send()
+        .await
+        .map_err(|e| format!("lrclib: {}", e.without_url()))?;
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+    let body: Value = response.json().await.map_err(|e| format!("lrclib json: {e}"))?;
+    if let Some(text) = body.get("plainLyrics").and_then(|v| v.as_str()) {
+        if !text.trim().is_empty() {
+            return Ok(Some(text.to_string()));
+        }
+    }
+    if let Some(text) = body.get("syncedLyrics").and_then(|v| v.as_str()) {
+        let cleaned = strip_lrc(text);
+        if !cleaned.trim().is_empty() {
+            return Ok(Some(cleaned));
+        }
+    }
+    Ok(None)
 }
 
 #[tauri::command]
@@ -1193,6 +1245,55 @@ fn main() {
                 http,
                 cache_dir,
             });
+
+            let show = MenuItem::with_id(app, "show", "Показать", true, None::<&str>)?;
+            let play = MenuItem::with_id(app, "play", "Пауза / играть", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &play, &quit])?;
+            let mut tray = TrayIconBuilder::with_id("vkx-tray")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "play" => {
+                        let _ = app.emit("tray-play", ());
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.build(app)?;
+
+            if let Some(window) = app.get_webview_window("main") {
+                let w = window.clone();
+                window.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = w.hide();
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1214,6 +1315,7 @@ fn main() {
             audio_delete,
             audio_get_by_id,
             lyrics,
+            external_lyrics,
             account_info,
             auth_url,
             open_url,
