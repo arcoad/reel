@@ -1,8 +1,8 @@
 [package]
-name = "vkx-desktop"
-version = "0.2.0"
+name = "reel-desktop"
+version = "1.0.0"
 edition = "2021"
-description = "VKX Desktop music player"
+description = "Reel music player"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

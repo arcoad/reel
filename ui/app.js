@@ -28,7 +28,7 @@ const state = {
   update: null,
 };
 
-const CACHE_META = "vkx_cache_meta";
+const CACHE_META = "reel_cache_meta";
 const themes = ["dark", "light", "amoled", "nord", "gruvbox"];
 
 function fmtTime(sec) {
@@ -77,7 +77,7 @@ function trackKey(t) {
 }
 
 function mediaUrl(key) {
-  return `http://vkxcache.localhost/${key}`;
+  return `http://reelcache.localhost/${key}`;
 }
 
 async function loadCacheMeta() {
@@ -194,11 +194,11 @@ async function loginWithCookies() {
 
 async function startLoginPoll() {
   stopLoginPoll();
-  el("login-error").textContent = "Ожидаю вход в VK… Если QR обновляется — войди по номеру/паролю.";
+  el("login-error").textContent = "Ожидаю вход… Если QR обновляется — войди по номеру/паролю.";
   try {
     await invoke("vk_login_window");
   } catch (e) {
-    el("login-error").textContent = `Не удалось открыть окно VK: ${e}`;
+    el("login-error").textContent = `Не удалось открыть окно входа: ${e}`;
     return;
   }
   const startedAt = Date.now();
@@ -221,9 +221,9 @@ async function startLoginPoll() {
       const msg = String(e);
       if (/web_token|unauthorized|flood|too many|\[9\]/i.test(msg)) {
         stopLoginPoll();
-        el("login-error").textContent = "VK ограничил попытки входа (error 9 / Flood control). Подожди 15–30 минут и зайди снова — лучше через cookie p+remixsid, это один запрос.";
+        el("login-error").textContent = "Сервис ограничил попытки входа (error 9 / Flood control). Подожди 15–30 минут и зайди снова — лучше через cookie p+remixsid.";
       } else {
-        el("login-error").textContent = `Ожидаю вход в VK… (${msg})`;
+        el("login-error").textContent = `Ожидаю вход… (${msg})`;
       }
     } finally {
       state.loginBusy = false;
@@ -240,7 +240,7 @@ function renderUserName() {
     .map((s) => s[0])
     .join("")
     .toUpperCase();
-  el("user-avatar").textContent = initials || (u.domain ? u.domain.slice(0, 2).toUpperCase() : "VK");
+  el("user-avatar").textContent = initials || (u.domain ? u.domain.slice(0, 2).toUpperCase() : "?");
 }
 
 async function loadAccount() {
@@ -441,10 +441,10 @@ function vkHint(err) {
   } catch {
     msg = s;
   }
-  if (code === 9 || /Flood control/i.test(msg)) return "VK временно ограничил запросы. Подожди 15–30 минут.";
-  if (code === 5) return "Токен недействителен или отозван. Войди заново через окно VK.";
-  if (code === 3 || /Unknown method/i.test(msg)) return "Этот токен не подходит для VK Audio. Войди через окно VK.";
-  return msg || "Не удалось получить данные VK.";
+  if (code === 9 || /Flood control/i.test(msg)) return "Сервис временно ограничил запросы. Подожди 15–30 минут.";
+  if (code === 5) return "Токен недействителен или отозван. Войди заново через окно входа.";
+  if (code === 3 || /Unknown method/i.test(msg)) return "Этот токен не подходит для сервиса. Войди через окно входа.";
+  return msg || "Не удалось получить данные сервиса.";
 }
 
 async function loadLocalTracks() {
@@ -552,7 +552,7 @@ async function loadLibrary() {
   state.libraryKeys = new Set(vkList.map(trackKey));
   state.playlists = playlists;
   let html = "";
-  if (vkError) html += `<div class="notice"><div class="notice-title">VK недоступен</div><div class="notice-text">${esc(vkError)}</div></div>`;
+  if (vkError) html += `<div class="notice"><div class="notice-title">Сервис недоступен</div><div class="notice-text">${esc(vkError)}</div></div>`;
   if (sections.length)
     html +=
       `<div class="section-title">Разделы</div><div class="row" style="flex-wrap:wrap">` +
@@ -974,13 +974,13 @@ function renderSettings() {
     </div>
 
     <div class="section-title">Аккаунт</div>
-    <div class="setting-row"><div><div class="setting-label">${esc(userName)}</div><div class="setting-desc">VK</div></div>
+    <div class="setting-row"><div><div class="setting-label">${esc(userName)}</div><div class="setting-desc">Аккаунт</div></div>
       <div class="row"><button id="reauth" class="ghost">Сменить</button><button id="logout2" class="ghost">Выйти</button></div>
     </div>
 
     <div class="section-title">О приложении</div>
-    <div class="setting-row"><div><div class="setting-label">VKX Desktop <span id="app-version">0.2.0</span></div><div class="setting-desc">Rust + Tauri · неофициальный порт VKX</div></div>
-      <button class="ghost" data-link="https://github.com/arcoad/vkx-desktop">GitHub</button>
+    <div class="setting-row"><div><div class="setting-label">Reel <span id="app-version">1.0.0</span></div><div class="setting-desc">Rust + Tauri · музыкальный плеер</div></div>
+      <button class="ghost" data-link="https://github.com/arcoad/reel">GitHub</button>
     </div>
   </div>`;
 
@@ -1082,7 +1082,7 @@ async function doLogout() {
 }
 
 function renderEq() {
-  el("eq-bands").innerHTML = `<div class="empty">Эквалайзер недоступен для сетевых потоков: CDN VK не отдаёт CORS, и Web Audio глушит такой звук. Локальный прокси для EQ — отдельная задача.</div>`;
+  el("eq-bands").innerHTML = `<div class="empty">Эквалайзер недоступен для сетевых потоков: CDN сервиса не отдаёт CORS, и Web Audio глушит такой звук. Локальный прокси для EQ — отдельная задача.</div>`;
 }
 
 function applyPreset() {
@@ -1243,7 +1243,7 @@ function playCurrent() {
   const key = trackKey(t);
   const cached = !t.local_id && state.cache.has(key);
   stopHls();
-  const src = t.local_id ? `http://vkxfile.localhost/${t.local_id}` : cached ? mediaUrl(key) : t.url;
+  const src = t.local_id ? `http://reelfile.localhost/${t.local_id}` : cached ? mediaUrl(key) : t.url;
   const hlsUrl = t.local_id || cached ? "" : t.hls;
   const resume = state.resumePosition;
   state.resumePosition = 0;
@@ -1372,7 +1372,7 @@ function bind() {
     try {
       const info = await invoke("vk_capture_cookies");
       if (info && info.access_token) await finishLogin(info);
-      else el("login-error").textContent = "Cookie пока нет. Войди в окне VK по номеру/паролю и нажми снова.";
+      else el("login-error").textContent = "Cookie пока нет. Войди в окне входа по номеру/паролю и нажми снова.";
     } catch (e) {
       el("login-error").textContent = String(e);
     }

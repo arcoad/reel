@@ -629,3 +629,8 @@ input[type="color"] {
 }
 .switch.on { background: var(--accent); border-color: var(--accent); }
 .switch.on span { transform: translateX(20px); background: #fff; }
+
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-logo { width: 26px; height: 26px; object-fit: contain; }
+.brand span { color: var(--fg); font-weight: 500; }
+.login-card .brand-logo { width: 40px; height: 40px; }

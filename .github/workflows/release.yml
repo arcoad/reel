@@ -47,7 +47,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
-          releaseName: "VKX Desktop v__VERSION__"
+          releaseName: "Reel v__VERSION__"
           releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false

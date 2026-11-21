@@ -8,9 +8,9 @@ try {
 } finally {
   Pop-Location
 }
-$exe = Join-Path $root "src-tauri\target\release\vkx-desktop.exe"
+$exe = Join-Path $root "src-tauri\target\release\reel-desktop.exe"
 $outDir = Join-Path $root "dist"
 New-Item -ItemType Directory -Force $outDir | Out-Null
-$out = Join-Path $outDir "VKX-Desktop-dev.exe"
+$out = Join-Path $outDir "Reel-dev.exe"
 Copy-Item $exe $out -Force
 Write-Host "Ready: $out"

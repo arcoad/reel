@@ -19,7 +19,7 @@ use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_updater::UpdaterExt;
 
 const API_VERSION: &str = "5.272";
-const USER_AGENT: &str = "VKX v9.0_rc4_pub (https://vkx.app)";
+const USER_AGENT: &str = "Reel/1.0.0 (+https://github.com/arcoad/reel)";
 const DEFAULT_CLIENT_ID: &str = "2685278";
 const AUDIO_CLIENT_ID: &str = "6287487";
 const AUDIO_API: &str = "https://api.vk.ru/method/";
@@ -620,7 +620,7 @@ async fn external_lyrics(
         .query(&[("artist_name", artist.as_str()), ("track_name", title.as_str())])
         .header(
             reqwest::header::USER_AGENT,
-            "VKX Desktop (https://github.com/arcoad/vkx-desktop)",
+            "Reel (https://github.com/arcoad/reel)",
         )
         .send()
         .await
@@ -1168,11 +1168,25 @@ async fn update_install(
     }
 }
 
+fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let target = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
 fn logs_dir() -> PathBuf {
     std::env::var("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join("dev.vkx.desktop")
+        .join("app.reel.desktop")
         .join("logs")
 }
 
@@ -1305,7 +1319,7 @@ async fn github_profile(state: State<'_, AppState>) -> Result<Value, String> {
     let response = state
         .http
         .get("https://api.github.com/users/arcoad")
-        .header(reqwest::header::USER_AGENT, "VKX Desktop")
+        .header(reqwest::header::USER_AGENT, "Reel")
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .send()
         .await
@@ -1357,7 +1371,7 @@ fn main() {
         }))
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .register_uri_scheme_protocol("vkxcache", |ctx, request| {
+        .register_uri_scheme_protocol("reelcache", |ctx, request| {
             let app = ctx.app_handle();
             let state = app.state::<AppState>();
             let key = request
@@ -1392,7 +1406,7 @@ fn main() {
                     .unwrap(),
             }
         })
-        .register_uri_scheme_protocol("vkxfile", |ctx, request| {
+        .register_uri_scheme_protocol("reelfile", |ctx, request| {
             let app = ctx.app_handle();
             let state = app.state::<AppState>();
             let id: i64 = request
@@ -1427,10 +1441,30 @@ fn main() {
         })
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
+            if !dir.join("reel.db").exists() {
+                if let Ok(appdata) = std::env::var("APPDATA") {
+                    let old = PathBuf::from(appdata).join("dev.vkx.desktop");
+                    if old.exists() && old.join("vkx.db").exists() {
+                        let _ = copy_dir_all(&old, &dir);
+                        let old_db = dir.join("vkx.db");
+                        let new_db = dir.join("reel.db");
+                        if old_db.exists() && !new_db.exists() {
+                            let _ = std::fs::rename(old_db, new_db);
+                        }
+                        for suffix in ["-wal", "-shm"] {
+                            let old_side = dir.join(format!("vkx.db{suffix}"));
+                            let new_side = dir.join(format!("reel.db{suffix}"));
+                            if old_side.exists() && !new_side.exists() {
+                                let _ = std::fs::rename(old_side, new_side);
+                            }
+                        }
+                    }
+                }
+            }
             std::fs::create_dir_all(&dir)?;
             let cache_dir = dir.join("cache");
             std::fs::create_dir_all(&cache_dir)?;
-            let conn = Connection::open(dir.join("vkx.db"))?;
+            let conn = Connection::open(dir.join("reel.db"))?;
             init_db(&conn)?;
             let http = reqwest::Client::builder()
                 .user_agent(USER_AGENT)
@@ -1454,7 +1488,7 @@ fn main() {
             let play = MenuItem::with_id(app, "play", "Пауза / играть", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &play, &quit])?;
-            let mut tray = TrayIconBuilder::with_id("vkx-tray")
+            let mut tray = TrayIconBuilder::with_id("reel-tray")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -1570,7 +1604,7 @@ fn main() {
             app_version
         ])
         .run(tauri::generate_context!())
-        .expect("vkx-desktop failed to start");
+        .expect("reel-desktop failed to start");
 }
 #[cfg(test)]
 mod tests {
@@ -1595,7 +1629,7 @@ mod tests {
 
     #[test]
     fn serves_range_and_full() {
-        let dir = std::env::temp_dir().join("vkx-test-range");
+        let dir = std::env::temp_dir().join("reel-test-range");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("a.mp3");
         std::fs::write(&path, b"0123456789").unwrap();
@@ -1625,7 +1659,7 @@ mod local_tests {
 
     #[test]
     fn walks_only_audio() {
-        let dir = std::env::temp_dir().join("vkx-test-scan");
+        let dir = std::env::temp_dir().join("reel-test-scan");
         let sub = dir.join("sub");
         std::fs::create_dir_all(&sub).unwrap();
         std::fs::write(dir.join("a.mp3"), b"x").unwrap();

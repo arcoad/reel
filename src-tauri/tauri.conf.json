@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "VKX Desktop",
-  "version": "0.2.0",
-  "identifier": "dev.vkx.desktop",
+  "productName": "Reel",
+  "version": "1.0.0",
+  "identifier": "app.reel.desktop",
   "build": {
     "frontendDist": "../ui"
   },
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "VKX Desktop",
+        "title": "Reel",
         "width": 1180,
         "height": 760,
         "minWidth": 900,
@@ -25,14 +25,20 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "icon": ["icons/icon.ico"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
     "createUpdaterArtifacts": true
   },
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU1OUVFQzc5ODU4QUJFNjMKUldSanZvcUZlZXllNWJQakJDMmYxTzNRcFV6TDRSK2ZHejJWRWxHcHFTVHVMeVRybERvTWpHbTYK",
       "endpoints": [
-        "https://github.com/arcoad/vkx-desktop/releases/latest/download/latest.json"
+        "https://github.com/arcoad/reel/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"
