@@ -459,6 +459,14 @@ async fn catalog_get_section(
 }
 
 #[tauri::command]
+async fn stream_mix_audios(state: State<'_, AppState>, count: Option<i64>) -> Result<Value, String> {
+    let mut p = Map::new();
+    p.insert("mix_id".into(), json!("common"));
+    p.insert("count".into(), json!(count.unwrap_or(30)));
+    vk_audio_call(&state, "audio.getStreamMixAudios", p).await
+}
+
+#[tauri::command]
 async fn audio_search2(
     state: State<'_, AppState>,
     q: String,
@@ -1568,6 +1576,7 @@ fn main() {
             audio_add,
             audio_delete,
             audio_get_by_id,
+            stream_mix_audios,
             lyrics,
             external_lyrics,
             account_info,

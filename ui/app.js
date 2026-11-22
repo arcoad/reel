@@ -813,8 +813,8 @@ async function renderHome() {
 async function playWave() {
   try {
     if (state.accountReady) await state.accountReady;
-    const res = await invoke("catalog_get_section", { sectionId: "my", startFrom: null });
-    const list = (res.audios || []).map(normTrack).slice(0, 50);
+    const res = await invoke("stream_mix_audios", { count: 50 });
+    const list = (Array.isArray(res) ? res : (res.audios || [])).map(normTrack).slice(0, 50);
     if (!list.length) return toast("Нет треков для волны");
     state.queue = list;
     state.index = 0;
