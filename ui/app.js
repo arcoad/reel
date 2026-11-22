@@ -6,7 +6,7 @@ const el = (id) => document.getElementById(id);
 const state = {
   token: null,
   user: null,
-  view: "library",
+  view: "home",
   tracks: [],
   local: [],
   queue: [],
@@ -26,6 +26,10 @@ const state = {
   loginPoll: null,
   loginBusy: false,
   update: null,
+  recent: [],
+  recentExpanded: false,
+  recentLoading: false,
+  recentRequested: false,
 };
 
 const CACHE_META = "reel_cache_meta";
@@ -124,7 +128,27 @@ async function loadSettings() {
   const s = {};
   for (const [k, v] of rows) s[k] = v;
   state.settings = s;
+  loadRecent();
   applyTheme();
+}
+
+function loadRecent() {
+  try {
+    const list = JSON.parse(state.settings.recent_tracks || "[]");
+    state.recent = Array.isArray(list) ? list.filter((t) => t && t.id && (t.url || t.hls || t.local_id)).slice(0, 30) : [];
+  } catch {
+    state.recent = [];
+  }
+}
+
+function rememberTrack(t) {
+  if (!t || !t.id) return;
+  const key = trackKey(t);
+  state.recent = [t, ...state.recent.filter((x) => trackKey(x) !== key)].slice(0, 30);
+  const rows = state.recent.map(({ id, owner_id, title, artist, duration, url, hls, lyrics_id, access_key, explicit, cover }) => ({ id, owner_id, title, artist, duration, url, hls, lyrics_id, access_key, explicit, cover }));
+  state.settings.recent_tracks = JSON.stringify(rows);
+  invoke("settings_set", { key: "recent_tracks", value: state.settings.recent_tracks }).catch(() => {});
+  if (state.view === "home") renderRecent();
 }
 
 function applyTheme() {
@@ -256,6 +280,30 @@ async function loadAccount() {
   }
 }
 
+function supportKey() {
+  const id = state.user && state.user.id ? state.user.id : "local";
+  return `support_seen_${id}`;
+}
+
+function showSupport() {
+  el("support").classList.remove("hidden");
+  el("support-continue").focus({ preventScroll: true });
+}
+
+async function dismissSupport() {
+  el("support").classList.add("hidden");
+  try {
+    await setSetting(supportKey(), "1");
+  } catch (e) {
+    console.warn("support setting failed", e);
+  }
+}
+
+function maybeShowSupport() {
+  if (state.settings[supportKey()] === "1") return;
+  showSupport();
+}
+
 async function afterLogin() {
   el("login").classList.add("hidden");
   el("shell").classList.remove("hidden");
@@ -263,7 +311,8 @@ async function afterLogin() {
   if (tokenUserId && (!state.user || !state.user.id)) state.user = { ...(state.user || {}), id: tokenUserId };
   renderUserName();
   restorePlayback().catch((e) => console.warn("playback restore failed", e));
-  await openView("library");
+  await openView("home");
+  maybeShowSupport();
   loadAccount();
 }
 
@@ -352,8 +401,9 @@ function setViewChrome(view) {
   state.view = view;
   document.querySelectorAll(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   el("search-box").classList.toggle("hidden", view !== "search");
-  el("refresh").classList.toggle("hidden", view === "settings" || view === "search");
-  const titles = { library: "Библиотека", search: "Поиск", playlists: "Плейлисты", cache: "Кэш", settings: "Настройки" };
+  el("home-search-form").classList.toggle("hidden", view !== "home");
+  el("refresh").classList.toggle("hidden", view === "home" || view === "settings" || view === "search");
+  const titles = { home: "Главная", library: "Библиотека", search: "Поиск", playlists: "Плейлисты", cache: "Кэш", settings: "Настройки" };
   el("view-title").textContent = titles[view] || view;
 }
 
@@ -363,6 +413,7 @@ async function openView(view) {
   content.classList.remove("view-in");
   void content.offsetWidth;
   content.classList.add("view-in");
+  if (view === "home") return renderHome();
   if (view === "library") return loadLibrary();
   if (view === "search") return renderSearchStub();
   if (view === "playlists") return loadPlaylists();
@@ -524,6 +575,270 @@ async function loadMyMusic(sectionId) {
     start = next;
   }
   return tracks;
+}
+
+function startWave(canvas) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const bands = [
+    { base: 0.54, amp: 0.13, freq: 2.6, speed: 0.1, width: 0.3, phase: 0.0 },
+    { base: 0.46, amp: 0.11, freq: 3.2, speed: -0.08, width: 0.2, phase: 2.1 },
+    { base: 0.62, amp: 0.08, freq: 2.0, speed: 0.06, width: 0.1, phase: 4.2 },
+  ];
+  let w = 1;
+  let h = 1;
+  let xs = [];
+  let grads = [];
+  let glow = null;
+  let raf = 0;
+  let last = 0;
+  const start = performance.now();
+
+  function build() {
+    const rect = canvas.getBoundingClientRect();
+    w = Math.max(1, rect.width);
+    h = Math.max(1, rect.height);
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    xs = [];
+    for (let i = 0; i <= 120; i++) xs.push(-0.08 * w + (1.16 * w * i) / 120);
+    grads = bands.map((band, i) => {
+      const gradient = ctx.createLinearGradient(-0.1 * w, 0, 1.1 * w, 0);
+      gradient.addColorStop(0, "rgba(60,30,160,0)");
+      gradient.addColorStop(0.18, i === 1 ? "rgba(92,60,255,0.35)" : "rgba(100,60,255,0.5)");
+      gradient.addColorStop(0.55, i === 1 ? "rgba(140,100,255,0.55)" : "rgba(170,130,255,0.8)");
+      gradient.addColorStop(0.85, i === 1 ? "rgba(90,50,220,0.35)" : "rgba(110,70,255,0.5)");
+      gradient.addColorStop(1, "rgba(70,40,190,0)");
+      return gradient;
+    });
+    glow = ctx.createRadialGradient(w * 0.5, h * 0.5, h * 0.05, w * 0.5, h * 0.5, w * 0.6);
+    glow.addColorStop(0, "rgba(110,70,255,0.12)");
+    glow.addColorStop(0.55, "rgba(80,45,200,0.06)");
+    glow.addColorStop(1, "rgba(0,0,0,0)");
+  }
+
+  function path(band, time) {
+    ctx.beginPath();
+    for (let i = 0; i < xs.length; i++) {
+      const x = xs[i];
+      const p = x / w;
+      const y =
+        h *
+        (band.base +
+          Math.sin(p * band.freq * 6.283 + time * band.speed + band.phase) * band.amp +
+          Math.sin(p * 11.2 - time * 0.11 + band.phase) * band.amp * 0.28);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+  }
+
+  function frame(now) {
+    if (!canvas.isConnected) {
+      observer.disconnect();
+      cancelAnimationFrame(raf);
+      return;
+    }
+    raf = requestAnimationFrame(frame);
+    if (now - last < 33) return;
+    last = now;
+    const time = (now - start) / 1000;
+    ctx.clearRect(0, 0, w, h);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, w, h);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (let i = 0; i < bands.length; i++) {
+      const band = bands[i];
+      path(band, time);
+      ctx.strokeStyle = grads[i];
+      ctx.globalAlpha = 0.14;
+      ctx.lineWidth = h * band.width;
+      ctx.stroke();
+      ctx.globalAlpha = 0.38;
+      ctx.lineWidth = h * band.width * 0.34;
+      ctx.stroke();
+      ctx.globalAlpha = 0.1;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  const observer = new ResizeObserver(build);
+  observer.observe(canvas);
+  build();
+  raf = requestAnimationFrame(frame);
+}
+
+function recentCard(t, i) {
+  const cover = t.cover
+    ? `<img src="${esc(t.cover)}" alt="" loading="lazy" />`
+    : `<span class="recent-letter">${esc((t.title || "?").trim().charAt(0).toUpperCase())}</span>`;
+  return `<button class="recent-card" data-recent="${i}" title="Включить снова" aria-label="Включить ${esc(t.title)} — ${esc(t.artist)}">
+    <span class="recent-cover">${cover}<span class="recent-play"><svg class="i"><use href="#i-play"></use></svg></span></span>
+    <span class="recent-name">${esc(t.title)}</span>
+    <span class="recent-artist">${esc(t.artist)}</span>
+  </button>`;
+}
+
+function renderRecent() {
+  const section = el("recent-section");
+  if (!section) return;
+  const all = state.recent;
+  const visible = all.slice(0, state.recentExpanded ? 12 : 6);
+  const cards = visible.length
+    ? visible.map((t, i) => recentCard(t, i)).join("")
+    : state.recentLoading
+      ? Array.from({ length: 6 }, () => `<div class="recent-card is-skeleton"><span class="recent-cover"></span><span class="recent-skel-line"></span><span class="recent-skel-line short"></span></div>`).join("")
+      : `<div class="recent-empty">Пока пусто. Включи трек — он появится здесь.</div>`;
+  section.innerHTML = `<div class="recent-head">
+    <div class="recent-title">Недавно прослушанное <span class="recent-chev">›</span></div>
+    ${all.length > 6 ? `<button class="recent-all" id="recent-all">${state.recentExpanded ? "Свернуть" : "Показать всё"}</button>` : ""}
+  </div><div class="recent-row">${cards}</div>`;
+  section.querySelectorAll("[data-recent]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number(button.dataset.recent);
+      playList(visible, index);
+    });
+  });
+  const allButton = el("recent-all");
+  if (allButton) {
+    allButton.addEventListener("click", () => {
+      state.recentExpanded = !state.recentExpanded;
+      renderRecent();
+    });
+  }
+  bindRecentWheel(section.querySelector(".recent-row"));
+}
+
+function bindRecentWheel(row) {
+  if (!row) return;
+  const maxScroll = () => Math.max(0, row.scrollWidth - row.clientWidth);
+  let target = row.scrollLeft;
+  let raf = 0;
+  let settle = 0;
+  let direction = 1;
+  const animate = () => {
+    if (!row.isConnected) {
+      raf = 0;
+      return;
+    }
+    const diff = target - row.scrollLeft;
+    if (Math.abs(diff) < 0.6) {
+      row.scrollLeft = target;
+      raf = 0;
+      return;
+    }
+    row.scrollLeft += diff * 0.22;
+    raf = requestAnimationFrame(animate);
+  };
+  const start = () => {
+    if (!raf) raf = requestAnimationFrame(animate);
+  };
+  const stepSize = () => {
+    const card = row.querySelector(".recent-card");
+    const gap = parseFloat(getComputedStyle(row).columnGap) || 14;
+    return (card ? card.getBoundingClientRect().width : 150) + gap;
+  };
+  row.addEventListener(
+    "wheel",
+    (e) => {
+      const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      if (!delta) return;
+      const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? row.clientWidth : 1;
+      const move = delta * scale;
+      const max = maxScroll();
+      if (!max) return;
+      e.preventDefault();
+      const current = target;
+      const next = Math.min(max, Math.max(0, current + move));
+      if (next === current) return;
+      target = next;
+      direction = Math.sign(move) || 1;
+      clearTimeout(settle);
+      settle = setTimeout(() => {
+        const step = stepSize();
+        const snapped = direction > 0 ? Math.ceil(target / step) * step : Math.floor(target / step) * step;
+        target = Math.min(max, Math.max(0, snapped));
+        start();
+      }, 140);
+      start();
+    },
+    { passive: false },
+  );
+  row.addEventListener("scroll", () => {
+    if (!raf) target = row.scrollLeft;
+  });
+}
+
+async function ensureRecent() {
+  if (state.recent.length || state.recentRequested) return;
+  state.recentRequested = true;
+  state.recentLoading = true;
+  renderRecent();
+  try {
+    const res = await invoke("catalog_get_section", { sectionId: "my", startFrom: null });
+    const list = (res.audios || []).map(normTrack).filter((t) => t.url || t.hls).slice(0, 12);
+    if (!state.recent.length) state.recent = list;
+  } catch {}
+  state.recentLoading = false;
+  if (state.view === "home") renderRecent();
+}
+
+async function renderHome() {
+  const source = state.settings.wave_source || "vkix";
+  el("content").innerHTML = `<section class="hero">
+    <canvas id="wave-canvas" class="hero-art" aria-hidden="true"></canvas>
+    <div class="hero-copy">
+      <div class="hero-kicker">REEL</div>
+      <h1>Моя <span>волна</span></h1>
+      <p>Умная подборка музыки под твоё настроение</p>
+      <div class="hero-actions">
+        <button id="wave-play" class="primary">Слушать</button>
+        <button id="wave-settings" class="ghost"><svg class="i"><use href="#i-eq"></use></svg>Настройки</button>
+      </div>
+      <div id="wave-panel" class="wave-panel hidden">
+        <div class="setting-desc">Источник подборки</div>
+        <div class="segmented">
+          <button data-wave-source="vkix" class="${source === "vkix" ? "on" : ""}">Алгоритм VKX</button>
+          <button data-wave-source="vk" class="${source === "vk" ? "on" : ""}">VK Музыка</button>
+        </div>
+        <p class="hint">Заглушка: влияет только на подпись</p>
+      </div>
+    </div>
+  </section>
+  <section class="recent" id="recent-section"></section>`;
+  startWave(el("wave-canvas"));
+  renderRecent();
+  ensureRecent();
+  el("wave-play").addEventListener("click", playWave);
+  el("wave-settings").addEventListener("click", () => el("wave-panel").classList.toggle("hidden"));
+  el("content").querySelectorAll("[data-wave-source]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const value = button.dataset.waveSource;
+      await setSetting("wave_source", value);
+      el("content").querySelectorAll("[data-wave-source]").forEach((b) => b.classList.toggle("on", b === button));
+      toast(value === "vk" ? "Источник: VK Музыка (заглушка)" : "Источник: алгоритм VKX (заглушка)");
+    });
+  });
+}
+
+async function playWave() {
+  try {
+    const res = await invoke("catalog_get_section", { sectionId: "my", startFrom: null });
+    const list = (res.audios || []).map(normTrack).slice(0, 50);
+    if (!list.length) return toast("Нет треков для волны");
+    state.queue = list;
+    state.index = 0;
+    playCurrent();
+    toast("Волна запущена");
+  } catch (e) {
+    toast(String(e));
+  }
 }
 
 async function loadLibrary() {
@@ -716,6 +1031,14 @@ function renderSearchStub() {
       doSearch();
     });
   });
+}
+
+function startSearch(query) {
+  const q = String(query || "").trim();
+  if (!q) return;
+  el("search-input").value = q;
+  openView("search");
+  doSearch();
 }
 
 async function doSearch() {
@@ -978,6 +1301,11 @@ function renderSettings() {
       <div class="row"><button id="reauth" class="ghost">Сменить</button><button id="logout2" class="ghost">Выйти</button></div>
     </div>
 
+    <div class="section-title">Поддержка</div>
+    <div class="setting-row"><div><div class="setting-label">Поддержать Reel</div><div class="setting-desc">Telegram-канал и GitHub</div></div>
+      <button id="support-open" class="ghost">Открыть</button>
+    </div>
+
     <div class="section-title">О приложении</div>
     <div class="setting-row"><div><div class="setting-label">Reel <span id="app-version">1.0.0</span></div><div class="setting-desc">Rust + Tauri · музыкальный плеер</div></div>
       <button class="ghost" data-link="https://github.com/arcoad/reel">GitHub</button>
@@ -1018,6 +1346,7 @@ function renderSettings() {
   el("content").querySelectorAll("[data-link]").forEach((button) => {
     button.addEventListener("click", () => invoke("open_url", { url: button.dataset.link }).catch((e) => toast(String(e))));
   });
+  el("support-open").addEventListener("click", showSupport);
   el("scan-btn").addEventListener("click", async () => {
     const dir = el("folder-input").value.trim();
     if (!dir) return;
@@ -1095,6 +1424,15 @@ function updateMuteIcon() {
   const icon = button.querySelector("use");
   if (icon) icon.setAttribute("href", audio.muted ? "#i-volume-off" : "#i-volume");
   button.classList.toggle("on", audio.muted);
+}
+
+function paintRange(input) {
+  if (!input) return;
+  const min = Number(input.min) || 0;
+  const max = Number(input.max) || 100;
+  const value = Number(input.value) || 0;
+  const pct = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  input.style.setProperty("--fill", `${Math.min(100, Math.max(0, pct))}%`);
 }
 
 function setPlayingIcon() {
@@ -1175,6 +1513,13 @@ function displayTrack(t) {
   el("np-artist").textContent = t.artist;
   el("cover").src = t.cover || "";
   el("cover").style.visibility = t.cover ? "visible" : "hidden";
+  el("cur").textContent = "0:00";
+  el("dur").textContent = fmtTime(t.duration);
+  el("seek").value = "0";
+  paintRange(el("seek"));
+  const liked = state.libraryKeys.has(trackKey(t));
+  el("like").classList.toggle("on", liked);
+  el("like").setAttribute("aria-pressed", String(liked));
 }
 
 function playbackSnapshot() {
@@ -1220,6 +1565,7 @@ async function restorePlayback() {
       el("volume").value = String(Math.round(audio.volume * 100));
       audio.muted = false;
       updateMuteIcon();
+      paintRange(el("volume"));
     }
     state.resumePosition = Number(saved.position) || 0;
     displayTrack(state.queue[index]);
@@ -1247,6 +1593,7 @@ function playCurrent() {
   const hlsUrl = t.local_id || cached ? "" : t.hls;
   const resume = state.resumePosition;
   state.resumePosition = 0;
+  rememberTrack(t);
   displayTrack(t);
   if (!el("now-view").classList.contains("hidden")) {
     renderNowView();
@@ -1393,8 +1740,22 @@ function bind() {
     }
   });
   el("logout").addEventListener("click", doLogout);
+  el("support-continue").addEventListener("click", dismissSupport);
+  el("support").addEventListener("click", (e) => {
+    if (e.target === el("support")) dismissSupport();
+  });
+  el("support").addEventListener("keydown", (e) => {
+    if (e.key === "Escape") dismissSupport();
+  });
+  el("support").querySelectorAll("[data-link]").forEach((button) => {
+    button.addEventListener("click", () => invoke("open_url", { url: button.dataset.link }).catch((e) => toast(String(e))));
+  });
   el("refresh").addEventListener("click", () => openView(state.view));
   el("search-btn").addEventListener("click", doSearch);
+  el("home-search-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    startSearch(el("home-search-input").value);
+  });
   el("search-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") doSearch();
   });
@@ -1427,10 +1788,14 @@ function bind() {
     savePlayback();
   });
   audio.addEventListener("ended", () => next(true));
-  audio.addEventListener("loadedmetadata", () => (el("dur").textContent = fmtTime(audio.duration)));
+  audio.addEventListener("loadedmetadata", () => {
+    el("dur").textContent = fmtTime(audio.duration);
+    paintRange(el("seek"));
+  });
   audio.addEventListener("timeupdate", () => {
     el("cur").textContent = fmtTime(audio.currentTime);
     if (audio.duration) el("seek").value = String(Math.round((audio.currentTime / audio.duration) * 1000));
+    paintRange(el("seek"));
     if (!el("now-view").classList.contains("hidden")) {
       el("now-cur").textContent = fmtTime(audio.currentTime);
       if (audio.duration) el("now-seek").value = String(Math.round((audio.currentTime / audio.duration) * 1000));
@@ -1438,15 +1803,24 @@ function bind() {
   });
   el("seek").addEventListener("input", () => {
     if (audio.duration) audio.currentTime = (Number(el("seek").value) / 1000) * audio.duration;
+    paintRange(el("seek"));
     schedulePlaybackSave();
   });
   el("volume").addEventListener("input", () => {
     audio.volume = Number(el("volume").value) / 100;
     audio.muted = false;
     updateMuteIcon();
+    paintRange(el("volume"));
     schedulePlaybackSave();
   });
   audio.volume = Number(el("volume").value) / 100;
+  paintRange(el("seek"));
+  paintRange(el("volume"));
+  el("like").addEventListener("click", () => {
+    const button = el("like");
+    const on = button.classList.toggle("on");
+    button.setAttribute("aria-pressed", String(on));
+  });
   el("mute").addEventListener("click", () => {
     audio.muted = !audio.muted;
     updateMuteIcon();
@@ -1525,11 +1899,11 @@ function bind() {
     }
     if (e.code === "Slash") {
       e.preventDefault();
-      openView("search");
-      el("search-input").focus();
+      if (state.view === "home") el("home-search-input")?.focus();
+      else openView("home").then(() => el("home-search-input")?.focus());
       return;
     }
-    const views = { Digit1: "library", Digit2: "playlists", Digit3: "cache", Digit4: "settings" };
+    const views = { Digit0: "home", Digit1: "library", Digit2: "playlists", Digit3: "cache", Digit4: "settings" };
     if (views[e.code] && !e.ctrlKey && !e.altKey && !e.metaKey) {
       e.preventDefault();
       openView(views[e.code]);
