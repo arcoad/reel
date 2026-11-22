@@ -26,6 +26,7 @@ const state = {
   loginPoll: null,
   loginBusy: false,
   update: null,
+  accountReady: null,
   recent: [],
   recentExpanded: false,
   recentLoading: false,
@@ -311,9 +312,9 @@ async function afterLogin() {
   if (tokenUserId && (!state.user || !state.user.id)) state.user = { ...(state.user || {}), id: tokenUserId };
   renderUserName();
   restorePlayback().catch((e) => console.warn("playback restore failed", e));
+  state.accountReady = loadAccount();
   await openView("home");
   maybeShowSupport();
-  loadAccount();
 }
 
 function showUpdatePrompt() {
@@ -777,6 +778,7 @@ function bindRecentWheel(row) {
 
 async function ensureRecent() {
   if (state.recent.length || state.recentRequested) return;
+  if (state.accountReady) await state.accountReady;
   state.recentRequested = true;
   state.recentLoading = true;
   renderRecent();
@@ -790,7 +792,6 @@ async function ensureRecent() {
 }
 
 async function renderHome() {
-  const source = state.settings.wave_source || "vkix";
   el("content").innerHTML = `<section class="hero">
     <canvas id="wave-canvas" class="hero-art" aria-hidden="true"></canvas>
     <div class="hero-copy">
@@ -799,15 +800,6 @@ async function renderHome() {
       <p>Умная подборка музыки под твоё настроение</p>
       <div class="hero-actions">
         <button id="wave-play" class="primary">Слушать</button>
-        <button id="wave-settings" class="ghost"><svg class="i"><use href="#i-eq"></use></svg>Настройки</button>
-      </div>
-      <div id="wave-panel" class="wave-panel hidden">
-        <div class="setting-desc">Источник подборки</div>
-        <div class="segmented">
-          <button data-wave-source="vkix" class="${source === "vkix" ? "on" : ""}">Алгоритм VKX</button>
-          <button data-wave-source="vk" class="${source === "vk" ? "on" : ""}">VK Музыка</button>
-        </div>
-        <p class="hint">Заглушка: влияет только на подпись</p>
       </div>
     </div>
   </section>
@@ -816,19 +808,11 @@ async function renderHome() {
   renderRecent();
   ensureRecent();
   el("wave-play").addEventListener("click", playWave);
-  el("wave-settings").addEventListener("click", () => el("wave-panel").classList.toggle("hidden"));
-  el("content").querySelectorAll("[data-wave-source]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const value = button.dataset.waveSource;
-      await setSetting("wave_source", value);
-      el("content").querySelectorAll("[data-wave-source]").forEach((b) => b.classList.toggle("on", b === button));
-      toast(value === "vk" ? "Источник: VK Музыка (заглушка)" : "Источник: алгоритм VKX (заглушка)");
-    });
-  });
 }
 
 async function playWave() {
   try {
+    if (state.accountReady) await state.accountReady;
     const res = await invoke("catalog_get_section", { sectionId: "my", startFrom: null });
     const list = (res.audios || []).map(normTrack).slice(0, 50);
     if (!list.length) return toast("Нет треков для волны");
@@ -1113,6 +1097,26 @@ async function openPlaylist(p) {
       (list.length ? `<div class="section-title">Плейлисты • ${list.length}</div>` + playlistGrid(list) : "") +
       `<div class="row"><button class="ghost" id="back-lib">← Библиотека</button></div>`;
     el("back-lib").addEventListener("click", () => openView("library"));
+  }
+}
+
+async function togglePlayerLike() {
+  const t = state.queue[state.index];
+  if (!t) return;
+  const key = trackKey(t);
+  const next = !state.libraryKeys.has(key);
+  try {
+    if (next) await invoke("audio_add2", { audioId: t.id, ownerId: t.owner_id });
+    else await invoke("audio_delete2", { audioId: t.id, ownerId: t.owner_id });
+    if (next) state.libraryKeys.add(key);
+    else state.libraryKeys.delete(key);
+    const on = state.libraryKeys.has(key);
+    el("like").classList.toggle("on", on);
+    el("like").setAttribute("aria-pressed", String(on));
+    renderActiveRow();
+    toast(next ? "Добавлено в библиотеку" : "Убрано из библиотеки");
+  } catch (e) {
+    toast(`Не удалось: ${e}`);
   }
 }
 
@@ -1406,6 +1410,7 @@ async function doLogout() {
   state.section = null;
   state.playlists = [];
   state.libraryKeys = new Set();
+  state.accountReady = null;
   audio.pause();
   showLogin();
 }
@@ -1816,11 +1821,7 @@ function bind() {
   audio.volume = Number(el("volume").value) / 100;
   paintRange(el("seek"));
   paintRange(el("volume"));
-  el("like").addEventListener("click", () => {
-    const button = el("like");
-    const on = button.classList.toggle("on");
-    button.setAttribute("aria-pressed", String(on));
-  });
+  el("like").addEventListener("click", togglePlayerLike);
   el("mute").addEventListener("click", () => {
     audio.muted = !audio.muted;
     updateMuteIcon();

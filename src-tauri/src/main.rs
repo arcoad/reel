@@ -650,7 +650,8 @@ async fn account_info(state: State<'_, AppState>) -> Result<Value, String> {
         "fields".into(),
         json!("photo_200,first_name,last_name,domain"),
     );
-    vk_call(&state, "users.get", p).await
+    let token = ensure_fresh_token(&state).await?;
+    vk_call_raw(&state.http, &token, "users.get", &p).await
 }
 
 #[tauri::command]
