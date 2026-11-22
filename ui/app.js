@@ -1415,12 +1415,115 @@ async function doLogout() {
   showLogin();
 }
 
-function renderEq() {
-  el("eq-bands").innerHTML = `<div class="empty">Эквалайзер недоступен для сетевых потоков: CDN сервиса не отдаёт CORS, и Web Audio глушит такой звук. Локальный прокси для EQ — отдельная задача.</div>`;
+const EQ_BANDS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+const EQ_PRESETS = {
+  flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  bass: [7, 6, 4, 2, 0, -1, -2, -3, -3, -4],
+  vocal: [-2, -1, 1, 3, 5, 4, 2, 0, -1, -2],
+  rock: [4, 3, 1, -1, -2, 0, 2, 3, 4, 5],
+};
+const eq = { ctx: null, source: null, filters: [], gains: [...EQ_PRESETS.flat], preset: "flat", ready: false };
+
+function eqProxyUrl(url) {
+  const bytes = new TextEncoder().encode(url);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return `http://reelstream.localhost/${btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
 }
 
-function applyPreset() {
+function eqSource(track, cached, key) {
+  if (track.local_id) return `http://reelfile.localhost/${track.local_id}`;
+  if (cached) return mediaUrl(key);
+  if (track.url) return eqProxyUrl(track.url);
+  return "";
+}
+
+function applyEqGains() {
+  if (!eq.ready) return;
+  eq.filters.forEach((filter, i) => filter.gain.setTargetAtTime(eq.gains[i], eq.ctx.currentTime, 0.02));
+}
+
+async function ensureEqualizer() {
+  if (eq.ready) return true;
+  const track = state.queue[state.index];
+  if (!track) return false;
+  const key = trackKey(track);
+  const cached = !track.local_id && state.cache.has(key);
+  const nextSrc = eqSource(track, cached, key);
+  if (!nextSrc) {
+    toast("EQ недоступен для HLS-трека без прямого URL");
+    return false;
+  }
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) {
+    toast("Web Audio API недоступен");
+    return false;
+  }
+  try {
+    eq.ctx = new Ctx();
+    audio.crossOrigin = "anonymous";
+    eq.source = eq.ctx.createMediaElementSource(audio);
+    let node = eq.source;
+    eq.filters = EQ_BANDS.map((freq) => {
+      const filter = eq.ctx.createBiquadFilter();
+      filter.type = "peaking";
+      filter.frequency.value = freq;
+      filter.Q.value = 1.1;
+      filter.gain.value = eq.gains[EQ_BANDS.indexOf(freq)];
+      node.connect(filter);
+      node = filter;
+      return filter;
+    });
+    node.connect(eq.ctx.destination);
+    eq.ready = true;
+    const wasPlaying = !audio.paused;
+    const position = audio.currentTime;
+    stopHls();
+    audio.src = nextSrc;
+    audio.load();
+    audio.addEventListener(
+      "loadedmetadata",
+      () => {
+        if (position > 0) audio.currentTime = Math.min(position, Math.max(0, audio.duration - 1));
+        if (wasPlaying) audio.play().catch(() => {});
+      },
+      { once: true },
+    );
+    await eq.ctx.resume();
+    applyEqGains();
+    return true;
+  } catch (e) {
+    eq.ready = false;
+    toast(`EQ не включился: ${e}`);
+    return false;
+  }
+}
+
+function renderEq() {
+  el("eq-bands").innerHTML = EQ_BANDS.map((freq, i) => {
+    const label = freq >= 1000 ? `${freq / 1000}k` : String(freq);
+    return `<div class="eq-band"><input type="range" min="-12" max="12" step="1" value="${eq.gains[i]}" data-eq="${i}" aria-label="${label} Hz" /><label>${label}</label></div>`;
+  }).join("");
+  el("eq-bands").querySelectorAll("[data-eq]").forEach((input) => {
+    input.addEventListener("input", async () => {
+      const index = Number(input.dataset.eq);
+      eq.gains[index] = Number(input.value);
+      eq.preset = "custom";
+      if (!eq.ready && !(await ensureEqualizer())) return;
+      applyEqGains();
+    });
+  });
+  document.querySelectorAll("[data-preset]").forEach((button) => {
+    button.classList.toggle("on", button.dataset.preset === eq.preset);
+  });
+}
+
+async function applyPreset(name) {
+  eq.preset = EQ_PRESETS[name] ? name : "flat";
+  eq.gains = [...EQ_PRESETS[eq.preset]];
   renderEq();
+  if (!eq.ready && !(await ensureEqualizer())) return;
+  applyEqGains();
 }
 
 function updateMuteIcon() {
@@ -1466,33 +1569,130 @@ function renderNowView() {
   updateNowPlayIcon();
 }
 
+const lyricsState = { timed: false, times: [], lines: [], active: -1, raf: 0, key: "" };
+
+function parseLyricsText(raw) {
+  const rows = [];
+  let timed = false;
+  for (const rawLine of String(raw || "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const content = line.replace(/\[[^\]]*\]/g, "").trim();
+    if (!content) continue;
+    const stamps = [...line.matchAll(/\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g)];
+    if (stamps.length) {
+      timed = true;
+      for (const stamp of stamps) {
+        const frac = stamp[3] ? Number(stamp[3].padEnd(3, "0").slice(0, 3)) / 1000 : 0;
+        rows.push({ time: Number(stamp[1]) * 60 + Number(stamp[2]) + frac, text: content });
+      }
+    } else {
+      rows.push({ time: null, text: content });
+    }
+  }
+  if (!timed) return { timed: false, lines: rows.map((r) => r.text), times: [] };
+  const sorted = rows.filter((r) => r.time !== null).sort((a, b) => a.time - b.time);
+  return { timed: true, lines: sorted.map((r) => r.text), times: sorted.map((r) => r.time) };
+}
+
+function stopLyricsSync() {
+  if (lyricsState.raf) cancelAnimationFrame(lyricsState.raf);
+  lyricsState.raf = 0;
+}
+
+function focusLyric(index) {
+  if (index === lyricsState.active) return;
+  lyricsState.active = index;
+  const box = el("now-lyrics");
+  const track = box.querySelector(".lyrics-track");
+  if (!track) return;
+  [...track.children].forEach((line, i) => line.classList.toggle("active", i === index));
+  const line = track.children[index];
+  if (!line) return;
+  const offset = line.offsetTop + line.offsetHeight / 2 - box.clientHeight / 2;
+  track.style.transform = `translateY(${-offset}px)`;
+}
+
+function syncLyrics() {
+  if (!lyricsState.timed || !lyricsState.times.length) return;
+  const t = audio.currentTime;
+  let index = 0;
+  for (let i = 0; i < lyricsState.times.length; i++) {
+    if (lyricsState.times[i] <= t + 0.08) index = i;
+    else break;
+  }
+  focusLyric(index);
+  const track = el("now-lyrics").querySelector(".lyrics-track");
+  const line = track && track.children[index];
+  if (!line) return;
+  const start = lyricsState.times[index];
+  const end = lyricsState.times[index + 1] || Math.min(audio.duration || start + 4, start + 5);
+  const progress = end > start ? Math.max(0, Math.min(1, (t - start) / (end - start))) : 1;
+  line.style.setProperty("--fill", `${(progress * 100).toFixed(1)}%`);
+}
+
+function startLyricsSync() {
+  stopLyricsSync();
+  if (!lyricsState.timed) return;
+  const tick = () => {
+    if (el("now-view").classList.contains("hidden")) { lyricsState.raf = 0; return; }
+    syncLyrics();
+    lyricsState.raf = requestAnimationFrame(tick);
+  };
+  lyricsState.raf = requestAnimationFrame(tick);
+}
+
+function renderLyrics(text) {
+  const box = el("now-lyrics");
+  const parsed = parseLyricsText(text);
+  lyricsState.timed = parsed.timed;
+  lyricsState.times = parsed.times;
+  lyricsState.lines = parsed.lines;
+  lyricsState.active = -1;
+  box.classList.toggle("lyrics-timed", parsed.timed);
+  box.innerHTML = "";
+  if (!parsed.lines.length) return false;
+  const track = document.createElement("div");
+  track.className = "lyrics-track";
+  for (const line of parsed.lines) {
+    const node = document.createElement("div");
+    node.className = "lyrics-line";
+    node.textContent = line;
+    track.appendChild(node);
+  }
+  box.appendChild(track);
+  if (parsed.timed) {
+    syncLyrics();
+    startLyricsSync();
+  }
+  return true;
+}
+
 async function loadNowLyrics() {
   const track = state.queue[state.index];
   if (!track) return;
   const view = el("now-view");
-  view.classList.remove("no-lyrics");
-  el("now-lyrics").textContent = "Загрузка…";
   const key = trackKey(track);
+  stopLyricsSync();
+  lyricsState.key = key;
+  view.classList.remove("no-lyrics");
+  el("now-lyrics").innerHTML = '<div class="lyrics-line active">Загрузка…</div>';
   let text = "";
-  if (track.lyrics_id) {
-    try {
-      const res = await invoke("lyrics", { lyricsId: Number(track.lyrics_id) });
-      text = (res && res.text) || "";
-    } catch {}
-  }
+  try {
+    text = (await invoke("external_lyrics", { artist: track.artist, title: track.title, duration: track.duration || null })) || "";
+  } catch {}
   if (!text.trim()) {
-    try {
-      text = (await invoke("external_lyrics", { artist: track.artist, title: track.title })) || "";
-    } catch {}
+    if (track.lyrics_id) {
+      try {
+        const res = await invoke("lyrics", { lyricsId: Number(track.lyrics_id) });
+        text = (res && res.text) || "";
+      } catch {}
+    }
   }
   const current = state.queue[state.index];
   if (!current || trackKey(current) !== key) return;
-  if (text.trim()) {
-    el("now-lyrics").textContent = text;
-    view.classList.remove("no-lyrics");
-  } else {
-    view.classList.add("no-lyrics");
-  }
+  if (text.trim() && renderLyrics(text)) view.classList.remove("no-lyrics");
+  else view.classList.add("no-lyrics");
 }
 
 function openNowView() {
@@ -1503,6 +1703,7 @@ function openNowView() {
 }
 
 function closeNowView() {
+  stopLyricsSync();
   el("now-view").classList.add("hidden");
 }
 
@@ -1594,8 +1795,10 @@ function playCurrent() {
   const key = trackKey(t);
   const cached = !t.local_id && state.cache.has(key);
   stopHls();
-  const src = t.local_id ? `http://reelfile.localhost/${t.local_id}` : cached ? mediaUrl(key) : t.url;
-  const hlsUrl = t.local_id || cached ? "" : t.hls;
+  const eqSrc = eq.ready ? eqSource(t, cached, key) : "";
+  const src = eqSrc || (t.local_id ? `http://reelfile.localhost/${t.local_id}` : cached ? mediaUrl(key) : t.url);
+  const hlsUrl = eq.ready ? "" : t.local_id || cached ? "" : t.hls;
+  if (eq.ready && !eqSrc) toast("Для этого HLS-трека EQ недоступен");
   const resume = state.resumePosition;
   state.resumePosition = 0;
   rememberTrack(t);
@@ -1696,23 +1899,6 @@ function renderQueue() {
       renderQueue();
     });
   });
-}
-
-async function loadLyrics() {
-  const t = state.queue[state.index];
-  if (!t) return;
-  el("lyrics-text").textContent = "Загрузка…";
-  el("lyrics-modal").showModal();
-  if (!t.lyrics_id) {
-    el("lyrics-text").textContent = "У этого трека нет сохранённого текста (lyrics_id отсутствует).";
-    return;
-  }
-  try {
-    const res = await invoke("vk_audio_method", { method: "audio.getLyrics", params: { lyrics_id: Number(t.lyrics_id) } });
-    el("lyrics-text").textContent = res.text || "Пусто";
-  } catch (e) {
-    el("lyrics-text").textContent = `Ошибка: ${e}`;
-  }
 }
 
 function bind() {
@@ -1832,7 +2018,6 @@ function bind() {
     renderQueue();
     el("queue-modal").showModal();
   });
-  el("lyrics-btn").addEventListener("click", loadLyrics);
   el("eq-btn").addEventListener("click", () => {
     renderEq();
     el("eq-modal").showModal();

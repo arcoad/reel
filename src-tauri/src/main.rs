@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -599,18 +600,8 @@ async fn audio_get_by_id(state: State<'_, AppState>, audios: String) -> Result<V
 async fn lyrics(state: State<'_, AppState>, lyrics_id: i64) -> Result<Value, String> {
     let mut p = Map::new();
     p.insert("lyrics_id".into(), json!(lyrics_id));
-    vk_call(&state, "audio.getLyrics", p).await
-}
-
-fn strip_lrc(input: &str) -> String {
-    input
-        .lines()
-        .map(|line| match line.find(']') {
-            Some(index) => line[index + 1..].trim_start(),
-            None => line,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let token = ensure_fresh_token(&state).await?;
+    vk_call_raw(&state.http, &token, "audio.getLyrics", &p).await
 }
 
 #[tauri::command]
@@ -618,14 +609,22 @@ async fn external_lyrics(
     state: State<'_, AppState>,
     artist: String,
     title: String,
+    duration: Option<i64>,
 ) -> Result<Option<String>, String> {
     if artist.trim().is_empty() || title.trim().is_empty() {
         return Ok(None);
     }
+    let mut params = vec![
+        ("artist_name".to_string(), artist),
+        ("track_name".to_string(), title),
+    ];
+    if let Some(seconds) = duration {
+        params.push(("duration".to_string(), seconds.to_string()));
+    }
     let response = state
         .http
         .get("https://lrclib.net/api/get")
-        .query(&[("artist_name", artist.as_str()), ("track_name", title.as_str())])
+        .query(&params)
         .header(
             reqwest::header::USER_AGENT,
             "Reel (https://github.com/arcoad/reel)",
@@ -637,15 +636,14 @@ async fn external_lyrics(
         return Ok(None);
     }
     let body: Value = response.json().await.map_err(|e| format!("lrclib json: {e}"))?;
-    if let Some(text) = body.get("plainLyrics").and_then(|v| v.as_str()) {
+    if let Some(text) = body.get("syncedLyrics").and_then(|v| v.as_str()) {
         if !text.trim().is_empty() {
             return Ok(Some(text.to_string()));
         }
     }
-    if let Some(text) = body.get("syncedLyrics").and_then(|v| v.as_str()) {
-        let cleaned = strip_lrc(text);
-        if !cleaned.trim().is_empty() {
-            return Ok(Some(cleaned));
+    if let Some(text) = body.get("plainLyrics").and_then(|v| v.as_str()) {
+        if !text.trim().is_empty() {
+            return Ok(Some(text.to_string()));
         }
     }
     Ok(None)
@@ -1087,6 +1085,8 @@ fn file_response(request: &Request<Vec<u8>>, path: &std::path::Path) -> Response
         let _ = file.read_exact(&mut buf);
         return Response::builder()
             .status(StatusCode::PARTIAL_CONTENT)
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .header(header::ACCESS_CONTROL_EXPOSE_HEADERS, "Content-Length, Content-Range, Accept-Ranges")
             .header(header::CONTENT_TYPE, mime_for(path))
             .header(header::ACCEPT_RANGES, "bytes")
             .header(header::CONTENT_LENGTH, size.to_string())
@@ -1101,6 +1101,8 @@ fn file_response(request: &Request<Vec<u8>>, path: &std::path::Path) -> Response
     let _ = file.read_to_end(&mut buf);
     Response::builder()
         .status(StatusCode::OK)
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(header::ACCESS_CONTROL_EXPOSE_HEADERS, "Content-Length, Content-Range, Accept-Ranges")
         .header(header::CONTENT_TYPE, mime_for(path))
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CONTENT_LENGTH, len.to_string())
@@ -1380,6 +1382,100 @@ fn main() {
         }))
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .register_asynchronous_uri_scheme_protocol("reelstream", |ctx, request, responder| {
+            let encoded = request.uri().path().trim_start_matches('/').to_string();
+            let range = request
+                .headers()
+                .get(header::RANGE)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.to_string());
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app.state::<AppState>();
+                let target = URL_SAFE_NO_PAD
+                    .decode(encoded.as_bytes())
+                    .ok()
+                    .and_then(|b| String::from_utf8(b).ok())
+                    .and_then(|u| reqwest::Url::parse(&u).ok());
+                let allowed = target
+                    .as_ref()
+                    .map(|u| {
+                        u.scheme() == "https"
+                            && u.host_str()
+                                .map(|h| {
+                                    let host = h.to_ascii_lowercase();
+                                    ["vk.com", "vk.ru", "vkuser.net", "okcdn.ru", "userapi.com", "mycdn.me", "ok.ru"].iter().any(|d| host == *d || host.ends_with(&format!(".{d}")))
+                                })
+                                .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+                if !allowed {
+                    let _ = responder.respond(
+                        Response::builder()
+                            .status(StatusCode::FORBIDDEN)
+                            .header(header::CONTENT_TYPE, "text/plain")
+                            .body(b"stream host is not allowed".to_vec())
+                            .unwrap(),
+                    );
+                    return;
+                }
+                let mut req = state
+                    .http
+                    .get(target.unwrap())
+                    .header(header::USER_AGENT, USER_AGENT);
+                if let Some(range) = range {
+                    req = req.header(header::RANGE, range);
+                }
+                match req.send().await {
+                    Ok(resp) => {
+                        let status = resp.status();
+                        let content_type = resp
+                            .headers()
+                            .get(header::CONTENT_TYPE)
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("audio/mpeg")
+                            .to_string();
+                        let content_range = resp
+                            .headers()
+                            .get(header::CONTENT_RANGE)
+                            .and_then(|v| v.to_str().ok())
+                            .map(|v| v.to_string());
+                        let bytes = match resp.bytes().await {
+                            Ok(b) => b,
+                            Err(_) => {
+                                let _ = responder.respond(
+                                    Response::builder()
+                                        .status(StatusCode::BAD_GATEWAY)
+                                        .body(Vec::new())
+                                        .unwrap(),
+                                );
+                                return;
+                            }
+                        };
+                        let mut builder = Response::builder()
+                            .status(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY))
+                            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                            .header(header::ACCESS_CONTROL_EXPOSE_HEADERS, "Content-Length, Content-Range, Accept-Ranges")
+                            .header(header::ACCEPT_RANGES, "bytes")
+                            .header(header::CONTENT_TYPE, content_type)
+                            .header(header::CONTENT_LENGTH, bytes.len().to_string());
+                        if let Some(cr) = content_range {
+                            builder = builder.header(header::CONTENT_RANGE, cr);
+                        }
+                        let _ = responder.respond(builder.body(bytes.to_vec()).unwrap());
+                    }
+                    Err(_) => {
+                        let _ = responder.respond(
+                            Response::builder()
+                                .status(StatusCode::BAD_GATEWAY)
+                                .header(header::CONTENT_TYPE, "text/plain")
+                                .body(b"stream request failed".to_vec())
+                                .unwrap(),
+                        );
+                    }
+                }
+            });
+        })
         .register_uri_scheme_protocol("reelcache", |ctx, request| {
             let app = ctx.app_handle();
             let state = app.state::<AppState>();
