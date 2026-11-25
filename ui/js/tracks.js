@@ -90,8 +90,13 @@ async function setTrackDisliked(t, value) {
 
 async function toggleTrackDislike(t) {
   if (!t) return;
-  const next = !t.disliked;
-  if (await setTrackDisliked(t, next)) toast(next ? "Дизлайк поставлен" : "Дизлайк убран");
+  const disliked = !t.disliked;
+  if (await setTrackDisliked(t, disliked)) {
+    toast(disliked ? "Дизлайк поставлен" : "Дизлайк убран");
+    if (disliked && state.queue[state.index] && trackKey(state.queue[state.index]) === trackKey(t)) {
+      next(false);
+    }
+  }
 }
 
 async function togglePlayerDislike() {

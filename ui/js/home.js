@@ -583,7 +583,13 @@ async function refreshRecentCovers() {
 }
 
 const WAVE_CHUNK = 10;
-const WAVE_DISCOVERY_EVERY = 8;
+
+function waveDiscoveryQuota(size = WAVE_CHUNK) {
+  const raw = Number(state.settings.wave_discovery ?? "1");
+  const max = Math.max(0, size - 1);
+  if (!Number.isFinite(raw)) return 1;
+  return Math.max(0, Math.min(max, Math.round(raw)));
+}
 
 function shuffleCopy(list) {
   const arr = list.slice();
@@ -656,7 +662,7 @@ function takeFromLibrary(want, out, taken) {
     const track = w.deck.pop();
     if (!track) break;
     const key = trackKey(track);
-    if (w.used.has(key) || taken.has(key)) continue;
+    if (w.used.has(key) || taken.has(key) || track.disliked) continue;
     w.used.add(key);
     w.libKeys.add(key);
     taken.add(key);
@@ -693,7 +699,7 @@ async function takeFromMix(want, out, taken) {
     for (const track of list) {
       if (added >= want) break;
       const key = trackKey(track);
-      if (w.used.has(key) || taken.has(key) || w.seenMix.has(key)) continue;
+      if (w.used.has(key) || taken.has(key) || w.seenMix.has(key) || track.disliked) continue;
       w.seenMix.add(key);
       w.used.add(key);
       taken.add(key);
@@ -719,7 +725,7 @@ async function buildWaveChunk(size = WAVE_CHUNK) {
   const taken = new Set();
   const out = [];
   const hasLibrary = (state.myMusic || []).length > 0;
-  const mixQuota = hasLibrary ? Math.max(1, Math.round(size / WAVE_DISCOVERY_EVERY)) : size;
+  const mixQuota = hasLibrary ? waveDiscoveryQuota(size) : size;
   if (hasLibrary) takeFromLibrary(size - mixQuota, out, taken);
   if (out.length < size) await takeFromMix(size - out.length, out, taken);
   if (hasLibrary && out.length < size) takeFromLibrary(size - out.length, out, taken);

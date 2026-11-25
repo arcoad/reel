@@ -79,6 +79,18 @@ function renderSettings() {
       ${switchRow("update_notifications", "Уведомлять об обновлениях", "Окно при новой версии", enabled("update_notifications", true))}
     </div>
 
+    <div class="section-title">Моя волна</div>
+    <div class="setting-list">
+      <div class="setting-row">
+        <div><div class="setting-label">Новые треки</div><div class="setting-desc">Сколько треков из рекомендаций добавлять в каждый блок волны</div></div>
+        <div class="row" style="gap:8px">
+          <button class="ghost" id="wave-disc-down" aria-label="Меньше">−</button>
+          <span id="wave-disc-val" style="min-width:28px;text-align:center;font-variant-numeric:tabular-nums">${esc(String(waveDiscoveryQuota()))}</span>
+          <button class="ghost" id="wave-disc-up" aria-label="Больше">+</button>
+        </div>
+      </div>
+    </div>
+
     <div class="section-title">Внешний вид</div>
     <div class="setting-row"><div><div class="setting-label">Тема</div><div class="setting-desc">Оформление интерфейса</div></div>
       <select id="theme-select">${themes.map((t) => `<option value="${t}" ${t === (s.theme || "dark") ? "selected" : ""}>${t}</option>`).join("")}</select>
@@ -119,13 +131,24 @@ function renderSettings() {
     </div>
 
     <div class="section-title">О приложении</div>
-    <div class="setting-row"><div><div class="setting-label">Reel <span id="app-version">1.1.2</span></div><div class="setting-desc">Rust + Tauri · музыкальный плеер</div></div>
+    <div class="setting-row"><div><div class="setting-label">Reel <span id="app-version">1.1.3</span></div><div class="setting-desc">Rust + Tauri · музыкальный плеер</div></div>
       <button class="ghost" data-link="https://github.com/arcoad/reel">GitHub</button>
     </div>
   </div>`;
 
   el("theme-select").addEventListener("change", (e) => setSetting("theme", e.target.value));
   el("accent-input").addEventListener("input", (e) => setSetting("accent", e.target.value));
+  const waveDiscVal = el("wave-disc-val");
+  const waveDiscUp = el("wave-disc-up");
+  const waveDiscDown = el("wave-disc-down");
+  const clampWaveDisc = (v) => Math.max(0, Math.min(5, Math.round(v)));
+  const applyWaveDisc = async (delta) => {
+    const next = clampWaveDisc((Number(state.settings.wave_discovery ?? "1") || 0) + delta);
+    await setSetting("wave_discovery", String(next));
+    if (waveDiscVal) waveDiscVal.textContent = String(next);
+  };
+  if (waveDiscUp) waveDiscUp.addEventListener("click", () => applyWaveDisc(1));
+  if (waveDiscDown) waveDiscDown.addEventListener("click", () => applyWaveDisc(-1));
   el("content").querySelectorAll("[data-hotkey]").forEach((button) => {
     button.addEventListener("click", () => beginHotkeyCapture(button.dataset.hotkey, button));
   });

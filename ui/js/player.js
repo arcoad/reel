@@ -634,12 +634,34 @@ function nextIndex(dir) {
 
 async function next(auto = false) {
   await maybeExtendWave();
-  const n = nextIndex(1);
-  if (n === state.index && auto) {
+  if (!state.queue.length) return;
+  const start = state.index;
+  let n = nextIndex(1);
+  let tries = state.queue.length;
+  while (tries-- > 0 && n >= 0 && state.queue[n]?.disliked) {
+    if (state.shuffle) {
+      n = -1;
+      for (let i = 1; i <= state.queue.length; i++) {
+        const c = (start + i) % state.queue.length;
+        if (!state.queue[c]?.disliked) { n = c; break; }
+      }
+      break;
+    }
+    const prev = n;
+    state.index = n;
+    n = nextIndex(1);
+    state.index = start;
+    if (n === prev || n === start) { n = -1; break; }
+  }
+  if (n >= 0 && state.queue[n]?.disliked) n = -1;
+  state.index = start;
+  if (n < 0 || (n === start && auto)) {
     if (state.repeat === "track") {
       audio.currentTime = 0;
       audio.play();
+      return;
     }
+    audio.pause();
     return;
   }
   state.index = n;
@@ -651,7 +673,27 @@ function prev() {
     audio.currentTime = 0;
     return;
   }
-  state.index = nextIndex(-1);
+  const start = state.index;
+  let n = nextIndex(-1);
+  let tries = state.queue.length;
+  while (tries-- > 0 && n >= 0 && state.queue[n]?.disliked) {
+    if (state.shuffle) {
+      n = -1;
+      for (let i = 1; i <= state.queue.length; i++) {
+        const c = (start - i + state.queue.length) % state.queue.length;
+        if (!state.queue[c]?.disliked) { n = c; break; }
+      }
+      break;
+    }
+    const prevN = n;
+    state.index = n;
+    n = nextIndex(-1);
+    state.index = start;
+    if (n === prevN || n === start) { n = -1; break; }
+  }
+  state.index = start;
+  if (n < 0 || state.queue[n]?.disliked) return;
+  state.index = n;
   playCurrent();
 }
 

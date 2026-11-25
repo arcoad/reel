@@ -26,6 +26,7 @@ const state = {
   playlistFilter: "",
   playlistSection: null,
   playlistCache: new Map(),
+  playlistOpenReq: 0,
   myMusic: null,
   myMusicLoading: null,
   wave: {

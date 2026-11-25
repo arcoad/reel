@@ -418,7 +418,7 @@ function renderPlaylistView(playlist, res, append) {
   el("pl-refresh").addEventListener("click", () => {
     state.playlistCache.delete(playlist.sectionId);
     state.playlistSection = null;
-    openPlaylist(playlist);
+    openPlaylist(playlist, true);
   });
   const more = el("pl-more");
   if (more)
@@ -452,21 +452,26 @@ async function fetchPlaylistSection(playlist, startFrom) {
   throw lastError || new Error("Плейлист недоступен");
 }
 
-async function openPlaylist(playlist) {
+async function openPlaylist(playlist, fromBack = false) {
   if (!playlist) return;
+  const req = ++state.playlistOpenReq;
+  if (!fromBack) state.navStack.push(currentNav());
+  setViewChrome("playlists");
   el("content").innerHTML = `<div class="empty">Загрузка плейлиста…</div>`;
   try {
     const res = await fetchPlaylistSection(playlist, null);
+    if (req !== state.playlistOpenReq || state.view !== "playlists") return;
     renderPlaylistView(playlist, res, false);
   } catch (e) {
+    if (req !== state.playlistOpenReq || state.view !== "playlists") return;
     el("content").innerHTML =
       `<div class="row"><button class="ghost" id="back-pl">← Плейлисты</button></div>` +
-      `<div class="notice"><div class="notice-title">Плейлист не открылся</div><div class="notice-text">${esc(vkHint(e))}</div></div>` +
-      `<div class="row" style="margin-top:12px"><button class="ghost" id="pl-retry-open">Повторить</button></div>`;
+      `<div class="notice"><div class="notice-title">Плейлист не открылся</div><div class="notice-text">${esc(vkHint(e))}</div><button class="ghost" id="pl-retry-open" style="margin-top:10px">Повторить</button></div>`;
     el("back-pl").addEventListener("click", () => openView("playlists"));
-    el("pl-retry-open").addEventListener("click", () => openPlaylist(playlist));
+    el("pl-retry-open").addEventListener("click", () => openPlaylist(playlist, true));
   }
 }
+
 
 function pickArtistPhoto(artist) {
   const photos = Array.isArray(artist && artist.photo) ? artist.photo : [];
