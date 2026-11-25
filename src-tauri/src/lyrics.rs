@@ -91,6 +91,7 @@ pub(crate) async fn resolve_external_lyrics(
     // Внешние источники могут отвечать очень долго: ограничиваем каждый запрос 3 с
     // и запускаем их одновременно. Худший случай ~3 с вместо 4 x 30 с.
     let fast = reqwest::Client::builder()
+        .no_proxy()
         .user_agent(LYRICS_UA)
         .timeout(std::time::Duration::from_secs(3))
         .build()

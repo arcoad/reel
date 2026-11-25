@@ -109,17 +109,39 @@ function renderUserName() {
   if (accountLogin) accountLogin.textContent = u.domain ? `@${u.domain}` : "аккаунт";
 }
 
-async function loadAccount() {
+function cachedProfile() {
   try {
-    const users = await invoke("account_info");
-    const u = Array.isArray(users) ? users[0] : null;
-    if (u && u.id) {
-      state.user = { ...(state.user || {}), ...u };
-      renderUserName();
-    }
-  } catch (e) {
+    const raw = state.settings && state.settings.profile_cache;
+    if (!raw) return null;
+    const u = JSON.parse(raw);
+    return u && (u.first_name || u.last_name || u.photo_200) ? u : null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadAccount() {
+  // Имя и аватар уже показываем из кэша, чтобы вместо имени не мелькал id.
+  const cached = cachedProfile();
+  if (cached) {
+    state.user = { ...(state.user || {}), ...cached };
     renderUserName();
   }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const users = await invoke("account_info");
+      const u = Array.isArray(users) ? users[0] : null;
+      if (u && u.id) {
+        state.user = { ...(state.user || {}), ...u };
+        renderUserName();
+        setSetting("profile_cache", JSON.stringify(u)).catch(() => {});
+        return;
+      }
+    } catch (e) {
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 1200));
+    }
+  }
+  renderUserName();
 }
 
 function supportKey() {

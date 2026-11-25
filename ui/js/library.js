@@ -25,7 +25,12 @@ async function loadLibraryCatalog(force = false) {
   for (const raw of extra) {
     const p = normalizePlaylist(raw, state.user?.id);
     const key = `${p.owner_id}_${p.id}`;
-    if (seen.has(key)) continue;
+    if (seen.has(key)) {
+      // У одной и той же подборки VK иногда отдаёт фото только в audio.getPlaylists.
+      const existing = merged.find((x) => `${x.owner_id}_${x.id}` === key);
+      if (existing && !existing.photo && p.photo) existing.photo = p.photo;
+      continue;
+    }
     seen.add(key);
     merged.push(p);
   }
@@ -156,7 +161,7 @@ async function loadSection(sectionId, title = "") {
     const res = await invoke("catalog_get_section", { sectionId, startFrom: null });
     renderSection(sectionId, title || "", res, false);
   } catch (e) {
-    el("content").innerHTML = `<div class="empty" style="text-align:left;padding:0 0 12px">Ошибка раздела: ${esc(String(e))}</div><div class="row"><button class="ghost" id="back-lib">← Библиотека</button></div>`;
+    el("content").innerHTML = `<div class="empty" style="text-align:left;padding:0 0 12px">Ошибка раздела: ${esc(vkHint(e))}</div><div class="row"><button class="ghost" id="back-lib">← Библиотека</button></div>`;
     el("back-lib").addEventListener("click", () => openView("library"));
   }
 }
@@ -252,7 +257,7 @@ async function doSearch() {
     bindTracks(el("content"), list);
     rememberSearch(q);
   } catch (e) {
-    el("content").innerHTML = `<div class="empty">Ошибка: ${esc(String(e))}</div>`;
+    el("content").innerHTML = `<div class="empty">Ошибка: ${esc(vkHint(e))}</div>`;
   }
 }
 
@@ -327,7 +332,10 @@ function renderPlaylistsPage() {
   const summary = filter ? `найдено ${flat.length} из ${all.length}` : `всего ${all.length}`;
   el("content").innerHTML = `
     <div class="page-head"><div><h1>Плейлисты</h1><p>Твои, сохранённые и от исполнителей</p></div><button class="btn btn-ghost" id="pl-reload">Обновить</button></div>
-    <div class="setting-row"><div><div class="setting-label">Поиск</div><div class="setting-desc">${esc(summary)}</div></div><input id="pl-search" class="hotkey-btn" placeholder="Поиск по плейлистам" value="${esc(state.playlistFilter || "")}" /></div>
+    <div class="pl-toolbar">
+      <input id="pl-search" class="pl-search" placeholder="Поиск по плейлистам" value="${esc(state.playlistFilter || "")}" />
+      <span class="pl-total">${esc(summary)}</span>
+    </div>
     ${body || `<div class="empty">Плейлистов пока нет.</div>`}`;
   bindPlaylists(el("content"), flat);
   const search = el("pl-search");
@@ -453,7 +461,7 @@ async function openPlaylist(playlist) {
   } catch (e) {
     el("content").innerHTML =
       `<div class="row"><button class="ghost" id="back-pl">← Плейлисты</button></div>` +
-      `<div class="notice"><div class="notice-title">Плейлист не открылся</div><div class="notice-text">${esc(String(e))}</div></div>` +
+      `<div class="notice"><div class="notice-title">Плейлист не открылся</div><div class="notice-text">${esc(vkHint(e))}</div></div>` +
       `<div class="row" style="margin-top:12px"><button class="ghost" id="pl-retry-open">Повторить</button></div>`;
     el("back-pl").addEventListener("click", () => openView("playlists"));
     el("pl-retry-open").addEventListener("click", () => openPlaylist(playlist));
@@ -512,7 +520,7 @@ async function openArtist(id, name, fromBack = false) {
   } catch (e) {
     el("content").innerHTML =
       `<div class="row"><button class="ghost" id="artist-back">← Назад</button></div>` +
-      `<div class="notice"><div class="notice-title">Исполнитель не открылся</div><div class="notice-text">${esc(String(e))}</div></div>`;
+      `<div class="notice"><div class="notice-title">Исполнитель не открылся</div><div class="notice-text">${esc(vkHint(e))}</div></div>`;
     el("artist-back").addEventListener("click", goBack);
   }
 }
@@ -577,7 +585,7 @@ async function openAlbum(ownerId, albumId, title, cover, fromBack = false) {
   } catch (e) {
     el("content").innerHTML =
       `<div class="row"><button class="ghost" id="album-back">← Назад</button></div>` +
-      `<div class="notice"><div class="notice-title">Альбом не открылся</div><div class="notice-text">${esc(String(e))}</div></div>`;
+      `<div class="notice"><div class="notice-title">Альбом не открылся</div><div class="notice-text">${esc(vkHint(e))}</div></div>`;
     el("album-back").addEventListener("click", goBack);
   }
 }

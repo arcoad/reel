@@ -147,6 +147,9 @@ function vkHint(err) {
   if (code === 9 || /Flood control/i.test(msg)) return "Сервис временно ограничил запросы. Подожди 15–30 минут.";
   if (code === 5) return "Токен недействителен или отозван. Войди заново через окно входа.";
   if (code === 3 || /Unknown method/i.test(msg)) return "Этот токен не подходит для сервиса. Войди через окно входа.";
+  if (/^network[: ]/i.test(msg) || /error sending request|timed out|connect/i.test(msg)) {
+    return "Нет связи с VK. Проверь интернет или VPN и повтори попытку.";
+  }
   return msg || "Не удалось получить данные сервиса.";
 }
 
@@ -194,8 +197,10 @@ function playlistKind(p, userId) {
   const owner = Number(p.owner_id);
   const uid = Number(userId);
   if (p.type === "generated" || id < 0) return "vk";
+  // VK сам говорит, можно ли править подборку: правки = своя.
+  if (p.permissions && p.permissions.delete === true) return "own";
   if (p.followed === false) return "own";
-  if (p.followed === true) return "saved";
+  if (p.followed === true || p.is_following === true) return "saved";
   if (Number.isFinite(uid) && owner === uid) return "own";
   return "saved";
 }

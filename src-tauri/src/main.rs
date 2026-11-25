@@ -43,6 +43,7 @@ use updater::*;
 use logging::*;
 use storage::*;
 use startup::*;
+
 fn main() {
     init_logging();
     let result = tauri::Builder::default()
@@ -245,10 +246,22 @@ fn main() {
             std::fs::create_dir_all(&cache_dir)?;
             let conn = Connection::open(dir.join("reel.db"))?;
             init_db(&conn)?;
-            let http = reqwest::Client::builder()
+            // Системный прокси Windows (WinINET/WinHTTP) читать нельзя: там часто
+            // остаётся мёртвый SOCKS от VPN-клиента, и VK перестаёт открываться.
+            // Уважаем только явные переменные окружения.
+            let mut http_builder = reqwest::Client::builder()
+                .no_proxy()
                 .user_agent(USER_AGENT)
-                .timeout(std::time::Duration::from_secs(30))
-                .build()?;
+                .timeout(std::time::Duration::from_secs(30));
+            for key in ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] {
+                if let Ok(value) = std::env::var(key) {
+                    if let Ok(proxy) = reqwest::Proxy::all(&value) {
+                        http_builder = http_builder.proxy(proxy);
+                        break;
+                    }
+                }
+            }
+            let http = http_builder.build()?;
             let close_to_tray = db_get_setting(&conn, "close_to_tray")
                 .map(|v| v != "0")
                 .unwrap_or(true);

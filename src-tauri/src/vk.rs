@@ -20,27 +20,60 @@ pub(crate) async fn vk_call_raw(
     method: &str,
     params_obj: &Map<String, Value>,
 ) -> Result<Value, String> {
-    let mut req = http
-        .get(format!("https://api.vk.com/method/{method}"))
-        .query(&[("v", API_VERSION), ("access_token", token), ("lang", "ru")]);
-    for (k, v) in params_obj {
-        if v.is_null() {
-            continue;
+    let mut last = String::from("network: запрос не выполнен");
+    for attempt in 0..3u32 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(250 * attempt as u64)).await;
         }
-        req = req.query(&[(k.as_str(), value_to_string(v))]);
+        let mut req = http
+            .get(format!("https://api.vk.com/method/{method}"))
+            .query(&[("v", API_VERSION), ("access_token", token), ("lang", "ru")]);
+        for (k, v) in params_obj {
+            if v.is_null() {
+                continue;
+            }
+            req = req.query(&[(k.as_str(), value_to_string(v))]);
+        }
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                log_line(&format!(
+                    "vk {method}: transport error (attempt {}): {e:?}",
+                    attempt + 1
+                ));
+                last = format!("network: {}", e.without_url());
+                continue;
+            }
+        };
+        let status = resp.status();
+        let body: Value = match resp.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                last = format!("json: {e}");
+                continue;
+            }
+        };
+        if let Some(err) = body.get("error") {
+            let code = err.get("error_code").and_then(|v| v.as_i64()).unwrap_or(0);
+            if matches!(code, 6 | 10) && attempt < 2 {
+                last = vk_error(err);
+                continue;
+            }
+            return Err(vk_error(err));
+        }
+        if !status.is_success() {
+            if status.is_server_error() && attempt < 2 {
+                last = format!("http {status}");
+                continue;
+            }
+            return Err(format!("http {status}: {body}"));
+        }
+        return body
+            .get("response")
+            .cloned()
+            .ok_or_else(|| format!("no response field: {body}"));
     }
-    let resp = req.send().await.map_err(|e| format!("network: {}", e.without_url()))?;
-    let status = resp.status();
-    let body: Value = resp.json().await.map_err(|e| format!("json: {e}"))?;
-    if let Some(err) = body.get("error") {
-        return Err(vk_error(err));
-    }
-    if !status.is_success() {
-        return Err(format!("http {status}: {body}"));
-    }
-    body.get("response")
-        .cloned()
-        .ok_or_else(|| format!("no response field: {body}"))
+    Err(last)
 }
 
 pub(crate) fn clean_cookie(name: &str, raw: &str) -> String {
@@ -145,27 +178,46 @@ pub(crate) fn store_web_session(
     Ok(())
 }
 
+pub(crate) async fn refresh_from_cookies(state: &AppState) -> Option<String> {
+    let (p, sid) = {
+        let conn = state.db.lock().ok()?;
+        (
+            db_get_setting(&conn, "web_p"),
+            db_get_setting(&conn, "web_remixsid"),
+        )
+    };
+    let (p, sid) = (p?, sid?);
+    match exchange_web_token(&state.http, &p, &sid).await {
+        Ok(fresh) => {
+            let token = fresh.access_token.clone();
+            match store_web_session(state, &fresh, &p, &sid) {
+                Ok(()) => Some(token),
+                Err(e) => {
+                    log_line(&format!("token refresh: storing failed: {e}"));
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            log_line(&format!("token refresh failed: {e}"));
+            None
+        }
+    }
+}
+
 pub(crate) async fn ensure_fresh_token(state: &AppState) -> Result<String, String> {
-    let (token, expires, p, sid) = {
+    let (token, expires, has_cookies) = {
         let conn = state.db.lock().map_err(|_| "db lock".to_string())?;
         let token = require_token(&conn)?;
         let expires = token.expires_at;
-        (token.access_token, expires, db_get_setting(&conn, "web_p"), db_get_setting(&conn, "web_remixsid"))
+        let has_cookies = db_get_setting(&conn, "web_p").is_some()
+            && db_get_setting(&conn, "web_remixsid").is_some();
+        (token.access_token, expires, has_cookies)
     };
     let stale = expires.map(|e| e - now_ts() < 600).unwrap_or(false);
-    if stale {
-        if let (Some(p), Some(sid)) = (p, sid) {
-            match exchange_web_token(&state.http, &p, &sid).await {
-                Ok(fresh) => {
-                    store_web_session(state, &fresh, &p, &sid)?;
-                    return Ok(fresh.access_token);
-                }
-                Err(e) => {
-                    // Cookie нужны только для получения токена. Если обновление не вышло,
-                    // пробуем существующий токен — API сам скажет, истёк он или нет.
-                    log_line(&format!("token refresh failed, using stored token: {e}"));
-                }
-            }
+    if stale && has_cookies {
+        if let Some(fresh) = refresh_from_cookies(state).await {
+            return Ok(fresh);
         }
     }
     Ok(token)
@@ -176,37 +228,79 @@ pub(crate) async fn vk_audio_call(
     method: &str,
     params_obj: Map<String, Value>,
 ) -> Result<Value, String> {
-    let token = ensure_fresh_token(state).await?;
+    let mut token = ensure_fresh_token(state).await?;
     let form: Vec<(String, String)> = params_obj
         .iter()
         .filter(|(_, v)| !v.is_null())
         .map(|(k, v)| (k.clone(), value_to_string(v)))
         .collect();
-    let resp = state
-        .http
-        .post(format!("{AUDIO_API}{method}"))
-        .header(reqwest::header::USER_AGENT, MOBILE_UA)
-        .query(&[
-            ("v", "5.282"),
-            ("access_token", token.as_str()),
-            ("lang", "ru"),
-            ("client_id", AUDIO_CLIENT_ID),
-        ])
-        .form(&form)
-        .send()
-        .await
-        .map_err(|e| format!("network: {}", e.without_url()))?;
-    let status = resp.status();
-    let body: Value = resp.json().await.map_err(|e| format!("json: {e}"))?;
-    if let Some(err) = body.get("error") {
-        return Err(vk_error(err));
+    let mut last = String::from("network: запрос не выполнен");
+    let mut refreshed = false;
+    for attempt in 0..3u32 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(250 * attempt as u64)).await;
+        }
+        let resp = match state
+            .http
+            .post(format!("{AUDIO_API}{method}"))
+            .header(reqwest::header::USER_AGENT, MOBILE_UA)
+            .query(&[
+                ("v", "5.282"),
+                ("access_token", token.as_str()),
+                ("lang", "ru"),
+                ("client_id", AUDIO_CLIENT_ID),
+            ])
+            .form(&form)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                log_line(&format!(
+                    "vk {method}: transport error (attempt {}): {e:?}",
+                    attempt + 1
+                ));
+                last = format!("network: {}", e.without_url());
+                continue;
+            }
+        };
+        let status = resp.status();
+        let body: Value = match resp.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                last = format!("json: {e}");
+                continue;
+            }
+        };
+        if let Some(err) = body.get("error") {
+            let code = err.get("error_code").and_then(|v| v.as_i64()).unwrap_or(0);
+            // Токен мог протухнуть раньше срока: пробуем обновить его по cookie и повторить.
+            if code == 5 && !refreshed {
+                refreshed = true;
+                if let Some(fresh) = refresh_from_cookies(state).await {
+                    token = fresh;
+                    continue;
+                }
+            }
+            if matches!(code, 6 | 10) && attempt < 2 {
+                last = vk_error(err);
+                continue;
+            }
+            return Err(vk_error(err));
+        }
+        if !status.is_success() {
+            if status.is_server_error() && attempt < 2 {
+                last = format!("http {status}");
+                continue;
+            }
+            return Err(format!("http {status}: {body}"));
+        }
+        return body
+            .get("response")
+            .cloned()
+            .ok_or_else(|| format!("no response field: {body}"));
     }
-    if !status.is_success() {
-        return Err(format!("http {status}: {body}"));
-    }
-    body.get("response")
-        .cloned()
-        .ok_or_else(|| format!("no response field: {body}"))
+    Err(last)
 }
 
 #[tauri::command]

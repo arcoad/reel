@@ -1129,3 +1129,23 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.62); backdrop-filter: blur(6px); 
   .sidebar-head { justify-content: center; padding: 0; }
   .toasts { bottom: calc(var(--player-h) + 24px); }
 }
+
+/* ---------- playlists page ---------- */
+.pl-group { margin-bottom: 26px; }
+.pl-group-head { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; flex-wrap: wrap; }
+.pl-group-title { font-size: 17px; font-weight: 600; color: var(--text); }
+.pl-group-count {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px;
+  padding: 0 7px; border-radius: 999px; background: var(--surface-raised); color: var(--text-2);
+  font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.pl-group-hint { margin-left: auto; color: var(--text-3); font-size: 12.5px; }
+.pl-toolbar { display: flex; align-items: center; gap: 12px; margin: 2px 0 22px; }
+.pl-search {
+  flex: 1; min-width: 0; height: 38px; padding: 0 14px; border-radius: 12px;
+  background: var(--surface); border: 1px solid var(--hairline); color: var(--text);
+  font: inherit; font-size: 13.5px; outline: none;
+}
+.pl-search:focus { border-color: var(--hairline-strong); }
+.pl-total { color: var(--text-3); font-size: 12.5px; white-space: nowrap; }
+.playlist-card .pcover { display: grid; place-items: center; overflow: hidden; }
