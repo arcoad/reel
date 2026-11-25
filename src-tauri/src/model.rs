@@ -3,7 +3,7 @@
 use crate::*;
 
 pub(crate) const API_VERSION: &str = "5.272";
-pub(crate) const USER_AGENT: &str = "Reel/1.1.0 (+https://github.com/arcoad/reel)";
+pub(crate) const USER_AGENT: &str = "Reel/1.1.1 (+https://github.com/arcoad/reel)";
 pub(crate) const LYRICS_UA: &str = "Reel (https://github.com/arcoad/reel)";
 pub(crate) const DEFAULT_CLIENT_ID: &str = "2685278";
 pub(crate) const AUDIO_CLIENT_ID: &str = "6287487";

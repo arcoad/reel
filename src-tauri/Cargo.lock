@@ -3251,7 +3251,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "reel-desktop"`nversion = "1.1.0"
+name = "reel-desktop"
+version = "1.1.1"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
