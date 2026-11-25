@@ -198,7 +198,22 @@ function coverOf(t) {
   const album = t.album || {};
   const albumThumb = album.thumb || {};
   const thumb = t.thumb || {};
-  return albumThumb.photo_600 || albumThumb.photo_300 || thumb.photo_600 || thumb.photo_300 || album.photo_600 || "";
+  const direct = typeof t.cover === "string" ? t.cover : (t.cover && (t.cover.photo_600 || t.cover.photo_300)) || "";
+  return (
+    albumThumb.photo_1200 ||
+    albumThumb.photo_600 ||
+    albumThumb.photo_300 ||
+    albumThumb.photo_270 ||
+    thumb.photo_1200 ||
+    thumb.photo_600 ||
+    thumb.photo_300 ||
+    thumb.photo_270 ||
+    album.photo_1200 ||
+    album.photo_600 ||
+    direct ||
+    (typeof t.image === "string" ? t.image : "") ||
+    ""
+  );
 }
 
 function normTrack(t) {

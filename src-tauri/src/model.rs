@@ -7,7 +7,7 @@ pub(crate) const USER_AGENT: &str = "Reel/1.1.2 (+https://github.com/arcoad/reel
 pub(crate) const LYRICS_UA: &str = "Reel (https://github.com/arcoad/reel)";
 pub(crate) const DEFAULT_CLIENT_ID: &str = "2685278";
 pub(crate) const AUDIO_CLIENT_ID: &str = "6287487";
-pub(crate) const AUDIO_API: &str = "https://api.vk.ru/method/";
+pub(crate) const AUDIO_API: &str = "https://api.vk.com/method/";
 pub(crate) const MOBILE_UA: &str = "VKAndroidApp/4.13.1-1206 (Android 4.4.3; SDK 19; armeabi; ; ru)";
 pub(crate) const WEB_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0";
 

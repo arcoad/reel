@@ -68,7 +68,9 @@ function renderSearchStub() {
 
 function coverBox(src, name, cls) {
   const letter = esc(((name || "?").trim()[0] || "?").toUpperCase());
-  const img = src ? `<img class="cover-img" src="${esc(src)}" alt="" data-name="${esc(name)}" />` : "";
+  const img = src
+    ? `<img class="cover-img" src="${esc(src)}" alt="" data-name="${esc(name)}" loading="lazy" onerror="this.style.display='none';this.parentElement.classList.add('cover-missing')" />`
+    : "";
   return `<div class="${cls} ${src ? "" : "cover-missing"}" data-letter="${letter}" data-name="${esc(name)}">${img}</div>`;
 }
 
@@ -516,7 +518,6 @@ async function renderHome() {
           </div>`)
         .join("")
     : `<div class="empty">Пока пусто — включи трек, он появится здесь</div>`;
-  const featured = (state.playlists || []).slice(0, 3);
   el("content").innerHTML = `
     <div class="hero">
       <div class="hero-copy">
@@ -531,9 +532,7 @@ async function renderHome() {
       <div class="hero-art" aria-hidden="true"><div class="hero-vinyl"></div><div class="hero-sleeve"><span>REEL · VOL. 01</span></div></div>
     </div>
     <div class="section-title">Недавно прослушанное <small>${state.recent.length} треков</small></div>
-    <div class="cards-row">${cards}</div>
-    <div class="section-title">Для тебя <small>подборки на сегодня</small></div>
-    <div class="grid-cards">${featured.map((p, i) => playlistCard(p, i, true)).join("")}</div>`;
+    <div class="cards-row">${cards}</div>`;
   el("wave-play").addEventListener("click", playWave);
   el("content").querySelectorAll(".media-card[data-recent]").forEach((card) => {
     const play = () => playList(state.recent, Number(card.dataset.recent));
@@ -544,8 +543,38 @@ async function renderHome() {
     const fab = card.querySelector(".play-fab");
     if (fab) fab.addEventListener("click", (e) => { e.stopPropagation(); play(); });
   });
-  bindPlaylists(el("content"), featured);
+  refreshRecentCovers();
   ensureRecent();
+}
+
+// Обложки в VK подписаны и со временем протухают: обновляем URL у недавних треков.
+async function refreshRecentCovers() {
+  const list = (state.recent || []).filter((t) => t && t.id && !t.local_id);
+  if (!list.length) return;
+  if (Date.now() - (state.coversRefreshedAt || 0) < 600000) return;
+  state.coversRefreshedAt = Date.now();
+  try {
+    const res = await invoke("audio_by_id", { audios: list.slice(0, 50).map((t) => `${t.owner_id}_${t.id}`) });
+    const arr = Array.isArray(res) ? res : res.audios || res.items || [];
+    if (!arr.length) return;
+    const fresh = new Map();
+    for (const raw of arr) {
+      const t = normTrack(raw);
+      fresh.set(trackKey(t), t);
+    }
+    let changed = false;
+    for (const t of state.recent) {
+      const f = fresh.get(trackKey(t));
+      if (!f) continue;
+      if (f.cover && f.cover !== t.cover) { t.cover = f.cover; changed = true; }
+      if (f.url && f.url !== t.url) { t.url = f.url; changed = true; }
+      if (f.hls && f.hls !== t.hls) { t.hls = f.hls; changed = true; }
+    }
+    if (!changed) return;
+    state.settings.recent_tracks = JSON.stringify(state.recent);
+    invoke("settings_set", { key: "recent_tracks", value: state.settings.recent_tracks }).catch(() => {});
+    if (state.view === "home") renderHome();
+  } catch {}
 }
 
 const WAVE_CHUNK = 10;
