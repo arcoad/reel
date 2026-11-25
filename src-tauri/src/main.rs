@@ -333,6 +333,7 @@ fn main() {
             vk_login_window,
             vk_capture_cookies,
             catalog_get_audio,
+            audio_playlists,
             catalog_get_section,
             audio_search2,
             audio_add2,

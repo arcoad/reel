@@ -153,6 +153,10 @@ function renderNowView() {
   el("now-dur").textContent = fmtTime(audio.duration || track.duration);
   el("now-seek").value = audio.duration ? String(Math.round((audio.currentTime / audio.duration) * 1000)) : "0";
   updateNowPlayIcon();
+  const nowLike = el("now-like");
+  if (nowLike) nowLike.classList.toggle("on", state.libraryKeys.has(trackKey(track)));
+  const nowDislike = el("now-dislike");
+  if (nowDislike) nowDislike.classList.toggle("on", !!track.disliked);
 }
 
 const lyricsState = { timed: false, times: [], lines: [], active: -1, raf: 0, key: "" };
@@ -178,7 +182,13 @@ function parseLyricsText(raw) {
   }
   if (!timed) return { timed: false, lines: rows.map((r) => r.text), times: [] };
   const sorted = rows.filter((r) => r.time !== null).sort((a, b) => a.time - b.time);
-  return { timed: true, lines: sorted.map((r) => r.text), times: sorted.map((r) => r.time) };
+  // Две строки с одинаковой меткой (перевод/дубль) не должны подсвечиваться вместе.
+  const unique = [];
+  for (const row of sorted) {
+    if (unique.length && Math.abs(row.time - unique[unique.length - 1].time) < 0.01) continue;
+    unique.push(row);
+  }
+  return { timed: true, lines: unique.map((r) => r.text), times: unique.map((r) => r.time) };
 }
 
 function stopLyricsSync() {
@@ -193,6 +203,10 @@ function focusLyric(index) {
   const track = box.querySelector(".lyrics-track");
   if (!track) return;
   [...track.children].forEach((line, i) => line.classList.toggle("active", i === index));
+  if (index < 0) {
+    track.style.transform = "translateY(0)";
+    return;
+  }
   const line = track.children[index];
   if (!line) return;
   const offset = line.offsetTop + line.offsetHeight / 2 - box.clientHeight / 2;
@@ -202,10 +216,15 @@ function focusLyric(index) {
 function syncLyrics() {
   if (!lyricsState.timed || !lyricsState.times.length) return;
   const t = audio.currentTime;
-  let index = 0;
+  let index = -1;
   for (let i = 0; i < lyricsState.times.length; i++) {
-    if (lyricsState.times[i] <= t + 0.08) index = i;
+    if (lyricsState.times[i] <= t + 0.05) index = i;
     else break;
+  }
+  // До первой метки не подсвечиваем ничего: следующая строка ещё не началась.
+  if (index < 0) {
+    focusLyric(-1);
+    return;
   }
   focusLyric(index);
   const track = el("now-lyrics").querySelector(".lyrics-track");
@@ -364,6 +383,10 @@ function displayTrack(t) {
   const disliked = !!t.disliked;
   el("dislike").classList.toggle("on", disliked);
   el("dislike").setAttribute("aria-pressed", String(disliked));
+  const nowLike = el("now-like");
+  if (nowLike) nowLike.classList.toggle("on", liked);
+  const nowDislike = el("now-dislike");
+  if (nowDislike) nowDislike.classList.toggle("on", disliked);
 }
 
 function playbackSnapshot() {

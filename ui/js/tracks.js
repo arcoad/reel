@@ -12,6 +12,8 @@ async function togglePlayerLike() {
     const on = state.libraryKeys.has(key);
     el("like").classList.toggle("on", on);
     el("like").setAttribute("aria-pressed", String(on));
+    const nowLike = el("now-like");
+    if (nowLike) nowLike.classList.toggle("on", on);
     renderActiveRow();
     toast(next ? "Добавлено в библиотеку" : "Убрано из библиотеки");
   } catch (e) {
@@ -58,6 +60,8 @@ function updateDislikeDom(key, value) {
   if (cur && trackKey(cur) === key) {
     el("dislike").classList.toggle("on", value);
     el("dislike").setAttribute("aria-pressed", String(value));
+    const nowDislike = el("now-dislike");
+    if (nowDislike) nowDislike.classList.toggle("on", value);
   }
 }
 

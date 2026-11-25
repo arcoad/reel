@@ -34,8 +34,9 @@ function setViewChrome(view) {
   state.view = view;
   document.querySelectorAll(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   moveNavPill();
-  el("search-box").classList.toggle("hidden", view !== "search");
-  el("home-search-form").classList.toggle("hidden", view !== "home");
+  // Поиск живёт в центре топбара на всех экранах, как в прототипе.
+  el("search-box").classList.add("hidden");
+  el("home-search-form").classList.remove("hidden");
   el("refresh").classList.toggle("hidden", view === "home" || view === "settings" || view === "search" || view === "artist" || view === "album");
   const titles = { home: "Главная", library: "Библиотека", search: "Поиск", playlists: "Плейлисты", cache: "Кэш", settings: "Настройки", artist: "Исполнитель", album: "Альбом" };
   el("view-title").textContent = titles[view] || view;
@@ -57,6 +58,12 @@ async function openView(view) {
   if (view === "playlists") return loadPlaylists();
   if (view === "cache") return renderCache();
   if (view === "settings") return renderSettings();
+}
+
+function renderSearchStub() {
+  const q = el("search-input").value.trim();
+  el("content").innerHTML = `<div class="page-head"><div><h1>Поиск</h1><p>Треки, исполнители и альбомы</p></div></div>
+    <div class="empty">${icon("search")}<div>${q ? `Запрос «${esc(q)}» — нажми Enter в строке поиска` : "Начни вводить название в строке сверху и нажми Enter"}</div></div>`;
 }
 
 function coverBox(src, name, cls) {
@@ -114,11 +121,13 @@ function localToTrack(l) {
 
 function localRow(l, i) {
   const active = state.queue[state.index] && state.queue[state.index].local_id === l.id;
+  const letter = esc(((l.title || "?").trim()[0] || "?").toUpperCase());
   return `<div class="track ${active ? "active" : ""}" data-li="${i}">
     <div class="idx">${String(i + 1).padStart(2, "0")}</div>
-    <div><div class="title">${esc(l.title)}</div><div class="sub">${esc(l.artist)}</div></div>
-    <div class="time">${l.duration ? fmtTime(l.duration) : ""}</div>
-    <div class="actions"><button class="ghost" data-lrm="${i}">Убрать</button></div>
+    <div class="cover cover-sm cover-missing" data-letter="${letter}"></div>
+    <div><div class="t-title">${esc(l.title)}</div><div class="t-sub">${esc(l.artist)}</div></div>
+    <div class="t-time">${l.duration ? fmtTime(l.duration) : ""}</div>
+    <div class="t-actions"><button class="icon-btn" data-lrm="${i}" title="Убрать">${icon("trash")}</button></div>
   </div>`;
 }
 
@@ -183,6 +192,8 @@ function playlistKind(p, userId) {
   const owner = Number(p.owner_id);
   const uid = Number(userId);
   if (p.type === "generated" || id < 0) return "vk";
+  if (p.followed === false) return "own";
+  if (p.followed === true) return "saved";
   if (Number.isFinite(uid) && owner === uid) return "own";
   return "saved";
 }
@@ -262,11 +273,11 @@ async function loadSectionPage(sectionId, startFrom) {
   };
 }
 
-async function loadMyMusic(sectionId) {
+async function loadMyMusic(sectionId, maxPages = 12) {
   const seen = new Set();
   const tracks = [];
   let start = null;
-  for (let page = 0; page < 50; page++) {
+  for (let page = 0; page < maxPages; page++) {
     const chunk = await loadSectionPage(sectionId, start);
     for (const t of chunk.tracks) {
       const key = trackKey(t);
@@ -561,6 +572,7 @@ async function ensureMyMusic(force = false) {
         const inferred = inferUid(res);
         if (inferred) state.user = { ...(state.user || {}), id: inferred };
       }
+      state.playlists = normalizePlaylists(res.playlists, state.user?.id);
       const lib = librarySection((res.catalog && res.catalog.sections) || []);
       if (!lib) {
         state.myMusic = state.myMusic || [];

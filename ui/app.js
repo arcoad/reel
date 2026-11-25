@@ -47,6 +47,35 @@ function bind() {
   });
   el("refresh").addEventListener("click", () => openView(state.view));
   el("search-btn").addEventListener("click", doSearch);
+  // Кнопки «Моя музыка», «Плейлисты» и прочие data-view внутри экранов.
+  document.addEventListener("click", (e) => {
+    const target = e.target.closest("[data-view]");
+    if (!target || target.classList.contains("nav")) return;
+    openView(target.dataset.view);
+  });
+  // Горизонтальные ряды листаются колесом, но без видимого скроллбара.
+  document.addEventListener("wheel", (e) => {
+    const row = e.target.closest(".cards-row");
+    if (!row || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    const max = row.scrollWidth - row.clientWidth;
+    if (max <= 0) return;
+    const next = row.scrollLeft + e.deltaY;
+    if (next <= 0 || next >= max) return;
+    row.scrollLeft = next;
+    e.preventDefault();
+  }, { passive: false });
+  const themeToggle = el("theme-toggle");
+  if (themeToggle) {
+    const paintThemeIcon = () => {
+      const use = themeToggle.querySelector("use");
+      if (use) use.setAttribute("href", (state.settings.theme || "dark") === "light" ? "#i-sun" : "#i-moon");
+    };
+    paintThemeIcon();
+    themeToggle.addEventListener("click", async () => {
+      await setSetting("theme", (state.settings.theme || "dark") === "light" ? "dark" : "light");
+      paintThemeIcon();
+    });
+  }
   el("home-search-form").addEventListener("submit", (event) => {
     event.preventDefault();
     startSearch(el("home-search-input").value);
@@ -164,6 +193,14 @@ function bind() {
   el("now-play").addEventListener("click", () => el("play").click());
   el("now-prev").addEventListener("click", prev);
   el("now-next").addEventListener("click", () => next(false));
+  el("fullscreen").addEventListener("click", openNowView);
+  el("lyrics-btn").addEventListener("click", openNowView);
+  el("now-like").addEventListener("click", togglePlayerLike);
+  el("now-dislike").addEventListener("click", togglePlayerDislike);
+  el("now-cache").addEventListener("click", () => {
+    const t = state.queue[state.index];
+    if (t) cacheTrack(t);
+  });
   el("now-seek").addEventListener("input", () => {
     if (audio.duration) audio.currentTime = (Number(el("now-seek").value) / 1000) * audio.duration;
   });

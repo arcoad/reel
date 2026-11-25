@@ -92,13 +92,15 @@ async function startLoginPoll() {
 function renderUserName() {
   const u = state.user || {};
   const name = [u.first_name, u.last_name].filter(Boolean).join(" ") || u.domain || (u.id ? String(u.id) : "");
-  el("user-name").textContent = name || "Не выполнен вход";
+  const nameNode = el("user-name");
+  if (nameNode) nameNode.textContent = name || "Не выполнен вход";
   const initials = [u.first_name, u.last_name]
     .filter(Boolean)
     .map((s) => s[0])
     .join("")
     .toUpperCase();
-  el("user-avatar").textContent = initials || (u.domain ? u.domain.slice(0, 2).toUpperCase() : "?");
+  const avatarNode = el("user-avatar");
+  if (avatarNode) avatarNode.textContent = initials || (u.domain ? u.domain.slice(0, 2).toUpperCase() : "?");
   const top = el("top-avatar");
   if (top) top.textContent = initials || "R";
   const accountName = el("account-name");

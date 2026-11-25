@@ -1,36 +1,87 @@
 // Reel UI — library.js
-async function loadLibrary() {
+async function loadLibraryCatalog(force = false) {
+  if (!force && state.catalog) return state.catalog;
+  let res = {};
+  let error = null;
+  try {
+    res = await invoke("catalog_get_audio", { ownerId: state.user?.id ?? null });
+  } catch (e) {
+    error = e;
+  }
+  if (!state.user?.id) {
+    const inferred = inferUid(res);
+    if (inferred) state.user = { ...(state.user || {}), id: inferred };
+  }
+  const lib = librarySection((res.catalog && res.catalog.sections) || []);
+  // audio.getPlaylists отдаёт и «свои» плейлисты, и подписки — это надёжнее,
+  // чем угадывать владельца по owner_id из catalog.getAudio.
+  let extra = [];
+  try {
+    const own = await invoke("audio_playlists", { ownerId: state.user?.id ?? null, count: 100, offset: 0 });
+    extra = (own && (own.items || own.playlists)) || [];
+  } catch {}
+  const merged = normalizePlaylists(res.playlists, state.user?.id);
+  const seen = new Set(merged.map((p) => `${p.owner_id}_${p.id}`));
+  for (const raw of extra) {
+    const p = normalizePlaylist(raw, state.user?.id);
+    const key = `${p.owner_id}_${p.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(p);
+  }
+  const rank = { own: 0, saved: 1, vk: 2 };
+  merged.sort((a, b) => (rank[a.kind] ?? 9) - (rank[b.kind] ?? 9));
+  state.catalog = { res, lib, error };
+  state.playlists = merged;
+  if (error && !merged.length) throw error;
+  return state.catalog;
+}
+
+async function loadLibrary(force = false) {
   state.loading = true;
   state.section = null;
   el("content").innerHTML = `<div class="empty">Загрузка…</div>`;
   await loadLocalTracks();
 
-  const history = (state.recent || []).filter((t) => t && (t.url || t.hls || t.local_id));
-  state.tracks = history;
-
   let playlists = [];
+  let music = [];
+  let note = "";
   try {
-    const res = await invoke("catalog_get_audio", { ownerId: state.user?.id ?? null });
-    if (!state.user?.id) {
-      const inferred = inferUid(res);
-      if (inferred) state.user = { ...(state.user || {}), id: inferred };
+    const { lib } = await loadLibraryCatalog(force);
+    playlists = state.playlists || [];
+    if (lib) {
+      music = await loadMyMusic(lib.id);
+      state.myMusic = music;
+    } else {
+      note = "VK не отдал раздел «Моя музыка». Попробуй обновить библиотеку.";
     }
-    playlists = normalizePlaylists(res.playlists, state.user?.id).filter((p) => p.kind === "own");
-  } catch {}
-  state.playlists = playlists;
-  const preview = playlists.slice(0, 6);
+  } catch (e) {
+    note = vkHint(e);
+    playlists = state.playlists || [];
+    music = state.myMusic || [];
+  }
+  state.tracks = music;
+  const preview = playlists.filter((p) => p.kind !== "vk").slice(0, 8);
+  const ownCount = preview.filter((p) => p.kind === "own").length;
+  const savedCount = preview.length - ownCount;
 
-  let html = `<div class="page-head"><div><h1>Библиотека</h1><p>Только то, что ты слушал</p></div><button class="btn btn-ghost" data-view="playlists">Плейлисты ${icon("forward")}</button></div>`;
-  if (history.length)
-    html += `<div class="section-title">Прослушанное <small>${history.length}</small></div><div class="track-list">${history.map((t, i) => trackRow(t, i, history)).join("")}</div>`;
+  let html = `<div class="page-head"><div><h1>Библиотека</h1><p>Твоя музыка и плейлисты из VK</p></div><button class="btn btn-ghost" data-view="playlists">Все плейлисты ${icon("forward")}</button></div>`;
+  if (note) html += `<div class="notice"><div class="notice-text">${esc(note)}</div></div>`;
+  if (preview.length) {
+    const parts = [];
+    if (ownCount) parts.push(`${ownCount} твоих`);
+    if (savedCount) parts.push(`${savedCount} от исполнителей`);
+    html += `<div class="section-title">Плейлисты <small>${parts.join(" · ")}</small></div>
+      <div class="library-playlists">${preview.map((p, i) => playlistCard(p, i, true)).join("")}</div>`;
+  }
+  if (music.length)
+    html += `<div class="section-title">Моя музыка <small>добавлено в VK · ${music.length}</small></div><div class="track-list">${music.map((t, i) => trackRow(t, i, music)).join("")}</div>`;
   else
-    html += `<div class="empty">${icon("clock")} Пусто. Здесь появятся треки, которые ты слушал.</div>`;
-  if (preview.length)
-    html += `<div class="section-title">Плейлисты <small>только твои</small></div><div class="grid-cards">${preview.map((p, i) => playlistCard(p, i, true)).join("")}</div>`;
+    html += `<div class="section-title">Моя музыка <small>добавлено в VK</small></div><div class="empty">${icon("music")} В «Моей музыке» VK пока пусто.</div>`;
   if (state.local.length)
     html += `<div class="section-title">Локальные файлы <small>${state.local.length}</small></div><div class="track-list">${state.local.map((l, i) => localRow(l, i)).join("")}</div>`;
   el("content").innerHTML = html;
-  bindTracks(el("content"), history);
+  bindTracks(el("content"), music);
   bindPlaylists(el("content"), preview);
   el("content").querySelectorAll("[data-li]").forEach((row) => {
     const i = Number(row.dataset.li);
@@ -40,7 +91,7 @@ async function loadLibrary() {
     if (rm) rm.addEventListener("click", async (e) => {
       e.stopPropagation();
       await invoke("local_remove", { id: state.local[i].id });
-      await loadLibrary();
+      await loadLibrary(force);
     });
   });
   state.loading = false;
@@ -183,6 +234,7 @@ function startSearch(query) {
   const q = String(query || "").trim();
   if (!q) return;
   el("search-input").value = q;
+  el("home-search-input").value = q;
   openView("search");
   doSearch();
 }
@@ -270,14 +322,13 @@ function renderPlaylistsPage() {
   if (!body) {
     body = all.length
       ? `<div class="empty">По запросу «${esc(state.playlistFilter)}» ничего не нашлось</div>`
-      : `<div class="empty">Пусто — своих плейлистов пока нет.</div>`;
+      : `<div class="empty">Плейлистов пока нет — VK не отдал ни одного.</div>`;
   }
   const summary = filter ? `найдено ${flat.length} из ${all.length}` : `всего ${all.length}`;
   el("content").innerHTML = `
-    <div class="page-head"><div><h1>Плейлисты</h1><p>Только созданные тобой</p></div><button class="btn btn-ghost" id="pl-reload">Обновить</button></div>
+    <div class="page-head"><div><h1>Плейлисты</h1><p>Твои, сохранённые и от исполнителей</p></div><button class="btn btn-ghost" id="pl-reload">Обновить</button></div>
     <div class="setting-row"><div><div class="setting-label">Поиск</div><div class="setting-desc">${esc(summary)}</div></div><input id="pl-search" class="hotkey-btn" placeholder="Поиск по плейлистам" value="${esc(state.playlistFilter || "")}" /></div>
-    <div class="section-title">Все плейлисты <small>${all.length}</small></div>
-    <div class="grid-cards">${flat.map((p, i) => playlistCard(p, i, true)).join("") || `<div class="empty">Пусто — своих плейлистов пока нет.</div>`}</div>`;
+    ${body || `<div class="empty">Плейлистов пока нет.</div>`}`;
   bindPlaylists(el("content"), flat);
   const search = el("pl-search");
   if (search) {
@@ -301,16 +352,12 @@ function renderPlaylistsPage() {
 async function loadPlaylists(resetFilter = false) {
   el("content").innerHTML = `<div class="empty">Загрузка плейлистов…</div>`;
   try {
-    const res = await invoke("catalog_get_audio", { ownerId: state.user?.id ?? null });
-    if (!state.user?.id) {
-      const inferred = inferUid(res);
-      if (inferred) state.user = { ...(state.user || {}), id: inferred };
-    }
-    state.playlists = normalizePlaylists(res.playlists, state.user?.id).filter((p) => p.kind === "own");
+    await loadLibraryCatalog(true);
     if (resetFilter) state.playlistFilter = "";
     renderPlaylistsPage();
   } catch (e) {
     el("content").innerHTML =
+      `<div class="page-head"><div><h1>Плейлисты</h1><p>Твои, сохранённые и от исполнителей</p></div></div>` +
       `<div class="notice"><div class="notice-title">Плейлисты недоступны</div><div class="notice-text">${esc(vkHint(e))}</div></div>` +
       `<div class="row" style="margin-top:12px"><button class="ghost" id="pl-retry">Повторить</button></div>`;
     const retry = el("pl-retry");

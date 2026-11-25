@@ -326,6 +326,16 @@ async function loadSettings() {
   const rows = await invoke("settings_all");
   const s = {};
   for (const [k, v] of rows) s[k] = v;
+  // Разовая миграция: синие акценты из 1.0.x гасили новый лабораторный вид.
+  const legacyAccents = ["#6f9dff", "#2f62d8", "#6f9bff", "#8fbcff", "#385594", "#e0a52a"];
+  if (!s.design_v2) {
+    if (legacyAccents.includes(String(s.accent || "").toLowerCase())) {
+      delete s.accent;
+      invoke("settings_set", { key: "accent", value: "" }).catch(() => {});
+    }
+    s.design_v2 = "1";
+    invoke("settings_set", { key: "design_v2", value: "1" }).catch(() => {});
+  }
   state.settings = s;
   loadRecent();
   applyTheme();

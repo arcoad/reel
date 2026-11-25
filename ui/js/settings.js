@@ -80,12 +80,11 @@ function renderSettings() {
     </div>
 
     <div class="section-title">Внешний вид</div>
-    <div class="setting-row"><div><div class="setting-label">Тема</div><div class="setting-desc">Тёмная или светлая</div></div><div class="segmented"><button class="${state.theme === "dark" ? "active" : ""}" data-theme-set="dark">Тёмная</button><button class="${state.theme === "light" ? "active" : ""}" data-theme-set="light">Светлая</button></div></div>
     <div class="setting-row"><div><div class="setting-label">Тема</div><div class="setting-desc">Оформление интерфейса</div></div>
       <select id="theme-select">${themes.map((t) => `<option value="${t}" ${t === (s.theme || "dark") ? "selected" : ""}>${t}</option>`).join("")}</select>
     </div>
     <div class="setting-row"><div><div class="setting-label">Акцент</div><div class="setting-desc">Кнопки и выделение</div></div>
-      <input id="accent-input" type="color" value="${esc(s.accent || "#6f9dff")}" />
+      <input id="accent-input" type="color" value="${esc(!s.accent || s.accent === "#6f9dff" ? "#b9f34a" : s.accent)}" />
     </div>
 
     <div class="section-title">Горячие клавиши</div>
@@ -120,18 +119,11 @@ function renderSettings() {
     </div>
 
     <div class="section-title">О приложении</div>
-    <div class="setting-row"><div><div class="setting-label">Reel <span id="app-version">1.0.0</span></div><div class="setting-desc">Rust + Tauri · музыкальный плеер</div></div>
+    <div class="setting-row"><div><div class="setting-label">Reel <span id="app-version">1.1.2</span></div><div class="setting-desc">Rust + Tauri · музыкальный плеер</div></div>
       <button class="ghost" data-link="https://github.com/arcoad/reel">GitHub</button>
     </div>
   </div>`;
 
-  el("content").querySelectorAll("[data-theme-set]").forEach((b) => {
-    b.addEventListener("click", async () => {
-      await setSetting("theme", b.dataset.themeSet);
-      state.theme = b.dataset.themeSet;
-      render();
-    });
-  });
   el("theme-select").addEventListener("change", (e) => setSetting("theme", e.target.value));
   el("accent-input").addEventListener("input", (e) => setSetting("accent", e.target.value));
   el("content").querySelectorAll("[data-hotkey]").forEach((button) => {

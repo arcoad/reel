@@ -295,6 +295,22 @@ pub(crate) async fn catalog_get_audio(
 }
 
 #[tauri::command]
+pub(crate) async fn audio_playlists(
+    state: State<'_, AppState>,
+    owner_id: Option<i64>,
+    count: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Value, String> {
+    let mut p = Map::new();
+    if let Some(id) = owner_id {
+        p.insert("owner_id".into(), json!(id));
+    }
+    p.insert("count".into(), json!(count.unwrap_or(100).clamp(1, 100)));
+    p.insert("offset".into(), json!(offset.unwrap_or(0)));
+    vk_audio_call(&state, "audio.getPlaylists", p).await
+}
+
+#[tauri::command]
 pub(crate) async fn catalog_get_section(
     state: State<'_, AppState>,
     section_id: String,
