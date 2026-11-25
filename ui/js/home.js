@@ -603,9 +603,9 @@ function takeFromLibrary(want, out, taken) {
   let guard = Math.max(8, want * 8);
   while (out.length < want && guard-- > 0) {
     if (!w.deck.length) {
-      w.deck = shuffleCopy(pool);
-      for (const key of w.libKeys) w.used.delete(key);
-      w.libKeys.clear();
+      // В волне каждый трек должен встречаться один раз за всю сессию.
+      w.deck = shuffleCopy(pool.filter((t) => !w.used.has(trackKey(t))));
+      if (!w.deck.length) break;
     }
     const track = w.deck.pop();
     if (!track) break;

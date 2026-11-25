@@ -1401,3 +1401,6 @@ svg { width: 18px; height: 18px; display: block; }
   .topbar { grid-template-columns: minmax(0,1fr) minmax(200px,1fr) auto; padding: 0 16px; }
   .player { left: 88px; }
 }
+
+/* 1:1 с лабораторией: заголовок страницы живёт только в контенте */
+#view-title { display: none !important; }
