@@ -4,3 +4,11 @@ node_modules/
 dist/
 *.key
 *.key.pub
+*.exe
+*.msi
+*.apk
+*.log
+.analysis/
+*.db
+*.db-wal
+*.db-shm
