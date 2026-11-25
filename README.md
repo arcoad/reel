@@ -43,11 +43,18 @@ cd ..
 npx @tauri-apps/cli@2 build
 ```
 
-Быстрая локальная сборка без установщика:
+Быстрая локальная сборка без установщика (скрипт сам подставляет `rust-lld`
+и печатает время сборки):
 
 ```powershell
 .\scripts\build-local.ps1
 ```
+
+Release-профиль в `src-tauri/Cargo.toml` настроен на скорость: без LTO,
+с инкрементальной компиляцией и без отладочных символов. Холодная сборка
+занимает несколько минут, повторная после правки `main.rs` — секунды.
+Каталог `src-tauri/target/` — кэш сборки; `cargo clean` сбрасывает его,
+но следующая сборка снова будет холодной.
 
 Установщик и `latest.json` появятся в `src-tauri/target/release/bundle/nsis/`.
 Для подписи:
@@ -67,6 +74,12 @@ npx @tauri-apps/cli@2 build
   протоколы `reelcache`/`reelfile` с Range для seek, трей и окно.
 - **Медиа** — `Audio` и hls.js; WebAudio не используется, чтобы не глушить кросс-доменный поток.
 - **Данные** — `reel.db`: `token`, `settings`, `cache`, `cache_meta`, `playback`, `local_tracks`.
+
+## Документация
+
+- [docs/RELEASING.md](docs/RELEASING.md) — как устроены релизы и автообновления.
+- [docs/VKX-9.0-spec.md](docs/VKX-9.0-spec.md) — разбор Android-клиента VKX 9.0:
+  какие запросы и параметры использует оригинальное приложение.
 
 ## Версии и релизы
 

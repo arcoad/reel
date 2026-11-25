@@ -1,6 +1,6 @@
 [package]
 name = "reel-desktop"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "Reel music player"
 
@@ -18,3 +18,10 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 tauri-plugin-updater = "2.14.1"
 tauri-plugin-single-instance = "2.5.5"
 tauri-plugin-autostart = "2.7.0"
+
+# Быстрая сборка: без LTO, инкрементально и без отладочных символов.
+# link.exe заменяется на rust-lld в scripts/build-local.ps1.
+[profile.release]
+opt-level = 2
+incremental = true
+strip = "symbols"
