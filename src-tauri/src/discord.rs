@@ -115,18 +115,23 @@ fn run(rx: Receiver<Presence>, stop: Arc<AtomicBool>) {
                     return;
                 }
             }
-            let due = now_ms() - last_sent >= 2_000;
-            if let Some(presence) = pending.take().filter(|_| due || last.is_none()) {
+            if let Some(presence) = pending.take() {
                 let empty = presence.details.is_empty() && presence.state.is_empty();
                 if empty || conn.alive {
                     conn.set_activity(&presence);
+                    last_sent = now_ms();
                 }
                 last = if empty { None } else { Some(presence) };
-                last_sent = now_ms();
             }
             if !conn.alive {
                 conn.close();
                 break;
+            }
+            if let Some(presence) = &last {
+                if now_ms() - last_sent >= 15_000 {
+                    conn.set_activity(presence);
+                    last_sent = now_ms();
+                }
             }
             std::thread::sleep(Duration::from_millis(50));
         }

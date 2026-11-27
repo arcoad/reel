@@ -41,10 +41,11 @@ function presenceRemaining(duration) {
 }
 
 async function sendPresence(t, remaining) {
-  const details = [t.title, t.artist].filter(Boolean).join(" — ").slice(0, 128);
+  const title = (t.title || "Без названия").slice(0, 128);
+  const artist = (t.artist || "").slice(0, 128);
   await invoke("discord_presence_update", {
-    details: details || "Без названия",
-    status: "Слушает Reel",
+    details: title,
+    status: artist,
     cover: presenceCover(t),
     startedAt: presenceStartedAt,
     duration: remaining,
