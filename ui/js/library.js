@@ -378,7 +378,8 @@ function playlistPage(res) {
   const total = Number((!Array.isArray(res) && res.count) || items.length);
   const tracks = items.map(normTrack);
   const offset = Number((!Array.isArray(res) && res.offset) || 0);
-  return { tracks, total, nextOffset: offset + items.length < total ? offset + items.length : null };
+  const next = offset + items.length;
+  return { tracks, total, nextOffset: items.length && next < total ? next : null };
 }
 
 function renderPlaylistView(playlist, page, append) {
@@ -388,7 +389,7 @@ function renderPlaylistView(playlist, page, append) {
   state.playlistSection = { id: playlist.sectionId, playlist, tracks, nextOffset: page.nextOffset };
   const kindLabel = playlist.kind === "own" ? "Мой плейлист" : playlist.kind === "vk" ? "Подборка VK" : "Сохранённый плейлист";
   const count = page.nextOffset ? `${tracks.length}+` : String(tracks.length);
-  const declared = page.total > tracks.length && !page.nextOffset ? ` · заявлено ${page.total}` : "";
+  const declared = page.total > tracks.length ? ` · заявлено ${page.total}` : "";
   el("content").innerHTML =
     `<button class="btn btn-ghost" id="back-pl" style="margin-bottom:24px">${icon("back")} Плейлисты</button>
     <div class="detail-hero">
