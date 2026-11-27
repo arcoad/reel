@@ -483,14 +483,15 @@ svg { width: 18px; height: 18px; display: block; }
 .now-artist { display: block; font-size: 14px; margin-top: 8px; color: var(--text-2); }
 .now-controls { display: flex; align-items: center; gap: 12px; }
 .now-controls .icon-btn { width: 44px; height: 44px; }
-.now-progress { display: flex; align-items: center; gap: 8px; width: 100%; }
-.now-progress span { color: var(--text-3); font-size: 12px; min-width: 36px; text-align: center; font-variant-numeric: tabular-nums; }
+.now-progress { display: flex; align-items: center; gap: 10px; width: 100%; }
+.now-progress span { color: var(--text-3); font-size: 12px; min-width: 42px; text-align: center; font-variant-numeric: tabular-nums; }
+.now-progress input[type="range"] { flex: 1 1 auto; min-width: 0; width: auto; }
 .now-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .now-right { display: flex; flex-direction: column; gap: 20px; height: min(60vh, 520px); }
 .lyrics-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
 .lyrics { flex: 1; overflow: hidden; position: relative; -webkit-mask-image: linear-gradient(transparent, #000 20%, #000 80%, transparent); mask-image: linear-gradient(transparent, #000 20%, #000 80%, transparent); }
-.lyrics-track { position: absolute; inset: 0; transition: transform 320ms var(--ease); }
-.lyrics-line { position: absolute; left: 0; right: 0; padding: 8px; text-align: center; font-size: 20px; line-height: 1.4; color: var(--text-3); transition: color 200ms var(--ease); }
+.lyrics-track { position: absolute; top: 50%; left: 0; right: 0; height: 0; transition: transform 320ms var(--ease); }
+.lyrics-line { position: absolute; left: 0; right: 0; height: 44px; padding: 8px; text-align: center; font-size: 20px; line-height: 28px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color 200ms var(--ease); }
 .lyrics-line.active { color: var(--text); font-weight: 500; background: linear-gradient(to right, var(--accent) 0%, var(--accent) var(--fill, 0%), var(--text) var(--fill, 0%), var(--text) 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 .lyrics-timed .lyrics-line { transform: none; }
 .now-view.hide-text .now-content { grid-template-columns: minmax(320px, 420px); }

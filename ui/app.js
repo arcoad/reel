@@ -123,7 +123,9 @@ function bind() {
   audio.addEventListener("ended", () => next(true));
   audio.addEventListener("loadedmetadata", () => {
     el("dur").textContent = fmtTime(audio.duration);
+    el("now-dur").textContent = fmtTime(audio.duration);
     paintRange(el("seek"));
+    paintRange(el("now-seek"));
   });
   audio.addEventListener("timeupdate", () => {
     el("cur").textContent = fmtTime(audio.currentTime);
@@ -132,6 +134,7 @@ function bind() {
     if (!el("now-view").classList.contains("hidden")) {
       el("now-cur").textContent = fmtTime(audio.currentTime);
       if (audio.duration) el("now-seek").value = String(Math.round((audio.currentTime / audio.duration) * 1000));
+      paintRange(el("now-seek"));
     }
   });
   el("seek").addEventListener("input", () => {
@@ -209,6 +212,7 @@ function bind() {
   });
   el("now-seek").addEventListener("input", () => {
     if (audio.duration) audio.currentTime = (Number(el("now-seek").value) / 1000) * audio.duration;
+    paintRange(el("now-seek"));
     presenceKey = "";
     pushDiscordPresence();
   });

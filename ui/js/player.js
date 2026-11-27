@@ -152,6 +152,7 @@ function renderNowView() {
   el("now-cur").textContent = fmtTime(audio.currentTime);
   el("now-dur").textContent = fmtTime(audio.duration || track.duration);
   el("now-seek").value = audio.duration ? String(Math.round((audio.currentTime / audio.duration) * 1000)) : "0";
+  paintRange(el("now-seek"));
   updateNowPlayIcon();
   const nowLike = el("now-like");
   if (nowLike) nowLike.classList.toggle("on", state.libraryKeys.has(trackKey(track)));
@@ -159,7 +160,7 @@ function renderNowView() {
   if (nowDislike) nowDislike.classList.toggle("on", !!track.disliked);
 }
 
-const lyricsState = { timed: false, times: [], lines: [], active: -1, raf: 0, key: "", step: 0, last: 0 };
+const lyricsState = { timed: false, times: [], lines: [], active: -1, raf: 0, key: "", last: 0 };
 
 function parseLyricsText(raw) {
   const rows = [];
@@ -196,11 +197,10 @@ function stopLyricsSync() {
   lyricsState.raf = 0;
 }
 
+const LYRIC_STEP = 44;
+
 function lyricStep() {
-  if (lyricsState.step) return lyricsState.step;
-  const track = el("now-lyrics").querySelector(".lyrics-track");
-  const first = track && track.children[0];
-  return first ? first.offsetHeight || 44 : 44;
+  return LYRIC_STEP;
 }
 
 function focusLyric(index) {
@@ -218,7 +218,7 @@ function focusLyric(index) {
     return;
   }
   const step = lyricStep();
-  const offset = index * step + step / 2 - box.clientHeight / 2;
+  const offset = index * step;
   track.style.transform = `translateY(${-offset}px)`;
 }
 
@@ -261,7 +261,6 @@ function renderLyrics(text) {
   lyricsState.times = parsed.times;
   lyricsState.lines = parsed.lines;
   lyricsState.active = -1;
-  lyricsState.step = 0;
   box.classList.toggle("lyrics-timed", parsed.timed);
   box.innerHTML = "";
   if (!parsed.lines.length) return false;
@@ -274,11 +273,8 @@ function renderLyrics(text) {
     track.appendChild(node);
   }
   box.appendChild(track);
-  // Позиции считаем после вставки: высота строки известна только после раскладки.
-  const step = lyricStep() || 44;
-  lyricsState.step = step;
   [...track.children].forEach((node, i) => {
-    node.style.top = `${i * step}px`;
+    node.style.top = `${i * LYRIC_STEP}px`;
   });
   if (parsed.timed) {
     syncLyrics();

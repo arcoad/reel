@@ -312,6 +312,7 @@ function bindInlineLinks(root) {
     node.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation();
+      closeNowView();
       openArtist(node.dataset.artistId, node.dataset.artistName);
     };
   });
@@ -319,6 +320,7 @@ function bindInlineLinks(root) {
     node.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation();
+      closeNowView();
       openAlbum(node.dataset.albumOwner, node.dataset.albumId, node.dataset.albumTitle, node.dataset.albumCover);
     };
   });
