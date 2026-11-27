@@ -12,7 +12,9 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_PIPE_BUSY, GENERIC_READ, GENERIC_WRITE, GetLastError, INVALID_HANDLE_VALUE,
 };
 #[cfg(windows)]
-use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_FLAG_OVERLAPPED, ReadFile, WriteFile};
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, ReadFile, WriteFile,
+};
 #[cfg(windows)]
 use windows_sys::Win32::System::Pipes::{NMPWAIT_WAIT_FOREVER, WaitNamedPipeW};
 
@@ -47,7 +49,7 @@ impl DiscordPresence {
     }
 
     pub(crate) fn start(&mut self) -> Result<(), String> {
-        if self.tx.is_some() {
+        if self.tx.is_some() && !self.stop.load(Ordering::SeqCst) {
             return Ok(());
         }
         let (tx, rx) = channel::<Presence>();
@@ -57,6 +59,7 @@ impl DiscordPresence {
             .name("discord-presence".into())
             .spawn(move || run(rx, thread_stop))
             .map_err(|e| e.to_string())?;
+        log_line("discord: presence thread started");
         self.tx = Some(tx);
         self.stop = stop;
         self.thread = Some(handle);
@@ -64,11 +67,9 @@ impl DiscordPresence {
     }
 
     pub(crate) fn stop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
         self.tx = None;
-        if let Some(handle) = self.thread.take() {
-            let _ = handle.join();
-        }
+        self.thread = None;
+        self.stop.store(true, Ordering::SeqCst);
     }
 
     pub(crate) fn update(&self, presence: Presence) {
@@ -86,21 +87,23 @@ impl Drop for DiscordPresence {
 
 fn run(rx: Receiver<Presence>, stop: Arc<AtomicBool>) {
     let mut last: Option<Presence> = None;
+    let mut last_sent = 0;
     while !stop.load(Ordering::SeqCst) {
         let mut conn = match Connection::open() {
             Some(conn) => conn,
             None => {
-                let _ = rx.recv_timeout(Duration::from_secs(5));
+                log_line("discord: pipe not ready, retrying");
+                std::thread::sleep(Duration::from_secs(3));
                 continue;
             }
         };
         conn.handshake();
+        log_line(&format!("discord: handshake alive={}", conn.alive));
         if !conn.alive {
             conn.close();
             let _ = rx.recv_timeout(Duration::from_secs(5));
             continue;
         }
-        let mut last_sent = 0;
         let mut pending: Option<Presence> = None;
         loop {
             if stop.load(Ordering::SeqCst) {
@@ -116,11 +119,11 @@ fn run(rx: Receiver<Presence>, stop: Arc<AtomicBool>) {
                 }
             }
             if let Some(presence) = pending.take() {
-                let empty = presence.details.is_empty() && presence.state.is_empty();
-                if empty || conn.alive {
+                if conn.alive {
                     conn.set_activity(&presence);
                     last_sent = now_ms();
                 }
+                let empty = presence.details.is_empty() && presence.state.is_empty();
                 last = if empty { None } else { Some(presence) };
             }
             if !conn.alive {
@@ -135,6 +138,7 @@ fn run(rx: Receiver<Presence>, stop: Arc<AtomicBool>) {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+        last = None;
     }
 }
 
@@ -142,18 +146,13 @@ struct Connection {
     handle: usize,
     alive: bool,
     nonce: u64,
+    buf: Vec<u8>,
 }
 
 impl Connection {
     fn open() -> Option<Self> {
-        for index in 0..10 {
-            let path = format!("{PIPE_TEMPLATE}{index}");
-            if let Some(handle) = open_pipe(&path) {
-                log_line(&format!("discord: connected to {path}"));
-                return Some(Self { handle, alive: true, nonce: 0 });
-            }
-        }
-        None
+        let handle = open_pipe(&format!("{PIPE_TEMPLATE}0"))?;
+        Some(Self { handle, alive: true, nonce: 0, buf: Vec::new() })
     }
 
     fn send(&mut self, opcode: u32, payload: &Value) -> bool {
@@ -166,41 +165,70 @@ impl Connection {
         write_all(self.handle, &frame)
     }
 
-    fn read(&mut self) -> Option<(u32, Value)> {
-        let mut header = [0u8; 8];
-        if !read_exact(self.handle, &mut header) {
-            self.alive = false;
-            return None;
+    fn pump(&mut self) {
+        let mut chunk = [0u8; 8192];
+        loop {
+            match read_some(self.handle, &mut chunk, 200) {
+                ReadResult::Data(0) => return,
+                ReadResult::Data(n) => self.buf.extend_from_slice(&chunk[..n]),
+                ReadResult::Timeout => return,
+                ReadResult::Closed => {
+                    self.alive = false;
+                    return;
+                }
+            }
         }
-        let opcode = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
-        let length = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
-        if length == 0 || length > 1 << 20 {
-            self.alive = false;
-            return None;
-        }
-        let mut body = vec![0u8; length];
-        if !read_exact(self.handle, &mut body) {
-            self.alive = false;
-            return None;
-        }
-        let value = serde_json::from_slice(&body).ok()?;
-        Some((opcode, value))
     }
+
+    fn next_frame(&mut self, deadline: u64) -> Option<(u32, Value)> {
+        loop {
+            if self.buf.len() >= 8 {
+                let opcode = u32::from_le_bytes([self.buf[0], self.buf[1], self.buf[2], self.buf[3]]);
+                let length = u32::from_le_bytes([self.buf[4], self.buf[5], self.buf[6], self.buf[7]]) as usize;
+                if length > 1 << 20 {
+                    self.alive = false;
+                    return None;
+                }
+                if self.buf.len() >= 8 + length {
+                    let body = self.buf[8..8 + length].to_vec();
+                    self.buf.drain(..8 + length);
+                    let value = serde_json::from_slice(&body).ok()?;
+                    return Some((opcode, value));
+                }
+            }
+            if now_ms() >= deadline {
+                return None;
+            }
+            self.pump();
+            if !self.alive {
+                return None;
+            }
+        }
+    }
+
+    fn read(&mut self, timeout_ms: u64) -> Option<(u32, Value)> {
+        self.next_frame(now_ms() + timeout_ms)
+    }
+
 
     fn handshake(&mut self) {
         self.nonce += 1;
         let payload = json!({"v": 1, "client_id": DISCORD_APP_ID});
-        if !self.send(0, &payload) {
+        let sent = self.send(0, &payload);
+        let _ = sent;
+        if !sent {
             self.alive = false;
             return;
         }
-        match self.read() {
+        match self.read(5_000) {
             Some((1, value)) if value.get("evt").and_then(|v| v.as_str()) == Some("READY") => {}
             Some((_, value)) => {
                 log_line(&format!("discord: handshake rejected: {value}"));
                 self.alive = false;
             }
-            None => self.alive = false,
+            None => {
+                        self.alive = false;
+            }
         }
     }
 
@@ -213,29 +241,11 @@ impl Connection {
             "nonce": self.nonce.to_string(),
         });
         if !self.send(1, &payload) {
+            log_line("discord: SET_ACTIVITY write failed");
             self.alive = false;
             return;
         }
-        // Discord отвечает на каждый SET_ACTIVITY: ответы нужно вычитывать,
-        // иначе пайп забивается и апдейты применяются с задержкой.
-        self.drain();
-    }
-
-    fn drain(&mut self) {
-        for _ in 0..4 {
-            match self.read() {
-                Some((_, value)) => {
-                    if let Some(code) = value.get("code").and_then(|v| v.as_i64()) {
-                        if code != 0 {
-                            log_line(&format!("discord: rejected: {value}"));
-                            self.alive = false;
-                            return;
-                        }
-                    }
-                }
-                None => return,
-            }
-        }
+        self.pump();
     }
 
     fn close(&mut self) {
@@ -280,30 +290,33 @@ fn activity_payload(presence: &Presence) -> Value {
 }
 
 #[cfg(windows)]
-fn open_pipe(path: &str) -> Option<usize> {
+fn open_pipe(_path: &str) -> Option<usize> {
     use std::os::windows::ffi::OsStrExt;
-    let wide: Vec<u16> = std::ffi::OsStr::new(path).encode_wide().chain(Some(0)).collect();
-    for _ in 0..3 {
+    let mut first: Option<usize> = None;
+    for index in 0..10 {
+        let slot = format!("{PIPE_TEMPLATE}{index}");
+        let wide: Vec<u16> = std::ffi::OsStr::new(&slot).encode_wide().chain(Some(0)).collect();
         let handle = unsafe {
             CreateFileW(
                 wide.as_ptr(),
                 GENERIC_READ | GENERIC_WRITE,
-                0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
                 std::ptr::null(),
                 3,
-                FILE_FLAG_OVERLAPPED,
+                0,
                 std::ptr::null_mut(),
             )
         };
-        if handle != INVALID_HANDLE_VALUE {
-            return Some(handle as usize);
+        if handle == INVALID_HANDLE_VALUE {
+            continue;
         }
-        if unsafe { GetLastError() } != ERROR_PIPE_BUSY {
-            return None;
+        if first.is_none() {
+            first = Some(handle as usize);
+        } else {
+            unsafe { CloseHandle(handle) };
         }
-        unsafe { WaitNamedPipeW(wide.as_ptr(), NMPWAIT_WAIT_FOREVER) };
     }
-    None
+    first
 }
 
 #[cfg(windows)]
@@ -331,60 +344,51 @@ fn write_all(handle: usize, data: &[u8]) -> bool {
     true
 }
 
-#[cfg(windows)]
-fn read_exact(handle: usize, buf: &mut [u8]) -> bool {
-    use windows_sys::Win32::Foundation::{GetLastError, ERROR_IO_PENDING};
-    use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
-    let mut offset = 0;
-    while offset < buf.len() {
-        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
-        let mut read: u32 = 0;
-        let ok = unsafe {
-            ReadFile(
-                handle as _,
-                buf[offset..].as_mut_ptr(),
-                (buf.len() - offset) as u32,
-                &mut read,
-                &mut overlapped,
-            )
-        };
-        if ok == 0 {
-            if unsafe { GetLastError() } != ERROR_IO_PENDING {
-                return false;
-            }
-            let mut got: u32 = 0;
-            let waited = unsafe { GetOverlappedResult(handle as _, &overlapped, &mut got, 1) };
-            if waited == 0 || got == 0 {
-                return false;
-            }
-            read = got;
-        }
-        if read == 0 {
-            return false;
-        }
-        offset += read as usize;
+enum ReadResult {
+    Data(usize),
+    Timeout,
+    Closed,
+}
+
+fn read_some(handle: usize, buf: &mut [u8], _timeout_ms: u32) -> ReadResult {
+    use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+    let mut available: u32 = 0;
+    let ok = unsafe {
+        PeekNamedPipe(
+            handle as _,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            &mut available,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return ReadResult::Closed;
     }
-    true
+    if available == 0 {
+        return ReadResult::Timeout;
+    }
+    let mut read: u32 = 0;
+    let want = buf.len().min(available as usize) as u32;
+    let ok = unsafe {
+        ReadFile(
+            handle as _,
+            buf.as_mut_ptr(),
+            want,
+            &mut read,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 || read == 0 {
+        return ReadResult::Timeout;
+    }
+    ReadResult::Data(read as usize)
 }
 
 #[cfg(windows)]
 fn close_pipe(handle: usize) {
     unsafe { CloseHandle(handle as _) };
-}
-
-#[cfg(not(windows))]
-fn open_pipe(_path: &str) -> Option<usize> {
-    None
-}
-
-#[cfg(not(windows))]
-fn write_all(_handle: usize, _data: &[u8]) -> bool {
-    false
-}
-
-#[cfg(not(windows))]
-fn read_exact(_handle: usize, _buf: &mut [u8]) -> bool {
-    false
 }
 
 #[cfg(not(windows))]
@@ -413,7 +417,11 @@ pub(crate) fn discord_presence_update(
     started_at: u64,
     duration: Option<u64>,
 ) -> Result<(), String> {
-    let presence = state.discord.lock().map_err(|_| "db lock".to_string())?;
+    let mut guard = state.discord.lock().map_err(|_| "db lock".to_string())?;
+    if guard.tx.is_none() {
+        guard.start()?;
+    }
+    let presence = guard;
     let now = now_ms();
     let started_at = started_at.min(now);
     let end_at = duration
@@ -425,7 +433,8 @@ pub(crate) fn discord_presence_update(
 
 #[tauri::command]
 pub(crate) fn discord_presence_clear(state: State<'_, AppState>) -> Result<(), String> {
-    let presence = state.discord.lock().map_err(|_| "db lock".to_string())?;
+    let guard = state.discord.lock().map_err(|_| "db lock".to_string())?;
+    let presence = guard;
     presence.update(Presence {
         details: String::new(),
         state: String::new(),

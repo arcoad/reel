@@ -10,13 +10,15 @@ async function applyDiscordPresence(enabled) {
   try {
     if (!enabled) {
       await invoke("discord_presence_stop");
+      presenceWatch = 0;
       await invoke("discord_presence_clear");
       presenceKey = "";
       return true;
     }
     await invoke("discord_presence_start");
     presenceKey = "";
-    await pushDiscordPresence();
+    await pushDiscordPresence(true);
+    schedulePresenceSync();
     return true;
   } catch (e) {
     toast(`Discord: ${e}`);
@@ -52,26 +54,37 @@ async function sendPresence(t, remaining) {
   }).catch(() => {});
 }
 
-async function pushDiscordPresence() {
-  if (!presenceEnabled()) return;
+async function pushDiscordPresence(force = false) {
+  if (force) {
+    await invoke("discord_presence_start").catch(() => {});
+  } else if (!presenceEnabled()) {
+    return;
+  }
   const t = state.queue[state.index];
-  if (!t || t.local_id) {
+  const key = t && !t.local_id ? trackKey(t) : "";
+  const ended = audio.ended || (audio.duration > 0 && audio.currentTime >= audio.duration - 0.25);
+  if (!key || audio.paused || ended) {
     presenceKey = "";
     await invoke("discord_presence_clear").catch(() => {});
     return;
   }
-  const ended = audio.ended || (audio.duration > 0 && audio.currentTime >= audio.duration - 0.25);
-  if (audio.paused || ended) {
-    if (presenceKey || !t.local_id) {
-      presenceKey = "";
-      await invoke("discord_presence_clear").catch(() => {});
-    }
-    return;
-  }
-  const key = trackKey(t);
   if (presenceKey !== key) {
     presenceKey = key;
     presenceStartedAt = Math.floor(Date.now() / 1000) - Math.floor(audio.currentTime || 0);
   }
   await sendPresence(t, presenceRemaining(presenceDuration(t)));
+}
+
+let presenceWatch = 0;
+
+function schedulePresenceSync() {
+  if (presenceWatch) return;
+  presenceWatch = setInterval(() => {
+    if (!presenceEnabled()) {
+      clearInterval(presenceWatch);
+      presenceWatch = 0;
+      return;
+    }
+    pushDiscordPresence();
+  }, 1000);
 }

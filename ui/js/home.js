@@ -1,6 +1,7 @@
 // Reel UI — home.js
 async function boot() {
   await loadSettings();
+  if (presenceEnabled()) applyDiscordPresence(true);
   applyNowText();
   await loadCacheMeta();
   state.token = await invoke("get_token");

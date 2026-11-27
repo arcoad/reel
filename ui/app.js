@@ -113,8 +113,8 @@ function bind() {
 
   audio.addEventListener("play", () => {
     setPlayingIcon();
-    pushDiscordPresence();
     updateMediaState("playing");
+    pushDiscordPresence(true);
   });
   audio.addEventListener("pause", () => {
     setPlayingIcon();
@@ -129,6 +129,7 @@ function bind() {
   });
   bindMediaSession();
   audio.addEventListener("loadedmetadata", () => {
+    if (!audio.paused) pushDiscordPresence(true);
     el("dur").textContent = fmtTime(audio.duration);
     el("now-dur").textContent = fmtTime(audio.duration);
     paintRange(el("seek"));
@@ -338,5 +339,8 @@ function updateMediaState(kind) {
 
 bind();
 boot()
-  .then(() => (presenceEnabled() ? applyDiscordPresence(true) : null))
+  .then(() => {
+    if (presenceEnabled()) return applyDiscordPresence(true);
+    return null;
+  })
   .catch((e) => showLogin(String(e)));
