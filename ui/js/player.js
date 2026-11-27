@@ -159,7 +159,7 @@ function renderNowView() {
   if (nowDislike) nowDislike.classList.toggle("on", !!track.disliked);
 }
 
-const lyricsState = { timed: false, times: [], lines: [], active: -1, raf: 0, key: "" };
+const lyricsState = { timed: false, times: [], lines: [], active: -1, raf: 0, key: "", step: 0, last: 0 };
 
 function parseLyricsText(raw) {
   const rows = [];
@@ -196,20 +196,29 @@ function stopLyricsSync() {
   lyricsState.raf = 0;
 }
 
+function lyricStep() {
+  if (lyricsState.step) return lyricsState.step;
+  const track = el("now-lyrics").querySelector(".lyrics-track");
+  const first = track && track.children[0];
+  return first ? first.offsetHeight || 44 : 44;
+}
+
 function focusLyric(index) {
   if (index === lyricsState.active) return;
   lyricsState.active = index;
   const box = el("now-lyrics");
   const track = box.querySelector(".lyrics-track");
   if (!track) return;
-  [...track.children].forEach((line, i) => line.classList.toggle("active", i === index));
+  [...track.children].forEach((line, i) => {
+    line.classList.toggle("active", i === index);
+    if (i !== index) line.style.setProperty("--fill", "0%");
+  });
   if (index < 0) {
     track.style.transform = "translateY(0)";
     return;
   }
-  const line = track.children[index];
-  if (!line) return;
-  const offset = line.offsetTop + line.offsetHeight / 2 - box.clientHeight / 2;
+  const step = lyricStep();
+  const offset = index * step + step / 2 - box.clientHeight / 2;
   track.style.transform = `translateY(${-offset}px)`;
 }
 
@@ -220,11 +229,6 @@ function syncLyrics() {
   for (let i = 0; i < lyricsState.times.length; i++) {
     if (lyricsState.times[i] <= t + 0.05) index = i;
     else break;
-  }
-  // До первой метки не подсвечиваем ничего: следующая строка ещё не началась.
-  if (index < 0) {
-    focusLyric(-1);
-    return;
   }
   focusLyric(index);
   const track = el("now-lyrics").querySelector(".lyrics-track");
@@ -246,6 +250,7 @@ function startLyricsSync() {
     syncLyrics();
     lyricsState.raf = requestAnimationFrame(tick);
   };
+  lyricsState.last = 0;
   lyricsState.raf = requestAnimationFrame(tick);
 }
 
@@ -256,6 +261,7 @@ function renderLyrics(text) {
   lyricsState.times = parsed.times;
   lyricsState.lines = parsed.lines;
   lyricsState.active = -1;
+  lyricsState.step = 0;
   box.classList.toggle("lyrics-timed", parsed.timed);
   box.innerHTML = "";
   if (!parsed.lines.length) return false;
@@ -268,6 +274,12 @@ function renderLyrics(text) {
     track.appendChild(node);
   }
   box.appendChild(track);
+  // Позиции считаем после вставки: высота строки известна только после раскладки.
+  const step = lyricStep() || 44;
+  lyricsState.step = step;
+  [...track.children].forEach((node, i) => {
+    node.style.top = `${i * step}px`;
+  });
   if (parsed.timed) {
     syncLyrics();
     startLyricsSync();

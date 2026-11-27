@@ -16,6 +16,7 @@ pub(crate) struct AppState {
     pub(crate) http: reqwest::Client,
     pub(crate) cache_dir: PathBuf,
     pub(crate) close_to_tray: AtomicBool,
+    pub(crate) discord: Mutex<DiscordPresence>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

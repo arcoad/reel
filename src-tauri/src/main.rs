@@ -30,6 +30,7 @@ mod net;
 mod updater;
 mod logging;
 mod storage;
+mod discord;
 mod startup;
 
 use model::*;
@@ -42,6 +43,7 @@ use net::*;
 use updater::*;
 use logging::*;
 use storage::*;
+use discord::*;
 use startup::*;
 
 fn main() {
@@ -274,6 +276,7 @@ fn main() {
                 http,
                 cache_dir,
                 close_to_tray: AtomicBool::new(close_to_tray),
+                discord: Mutex::new(DiscordPresence::new()),
             });
 
             let show = MenuItem::with_id(app, "show", "Показать", true, None::<&str>)?;
@@ -387,7 +390,11 @@ fn main() {
             autostart_get,
             set_close_to_tray,
             open_logs,
-            app_version
+            app_version,
+            discord_presence_start,
+            discord_presence_stop,
+            discord_presence_update,
+            discord_presence_clear
         ])
         .run(tauri::generate_context!());
 

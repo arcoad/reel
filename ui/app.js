@@ -111,9 +111,13 @@ function bind() {
     schedulePlaybackSave();
   });
 
-  audio.addEventListener("play", setPlayingIcon);
+  audio.addEventListener("play", () => {
+    setPlayingIcon();
+    pushDiscordPresence();
+  });
   audio.addEventListener("pause", () => {
     setPlayingIcon();
+    pushDiscordPresence();
     savePlayback();
   });
   audio.addEventListener("ended", () => next(true));
@@ -264,4 +268,6 @@ function bind() {
 }
 
 bind();
-boot().catch((e) => showLogin(String(e)));
+boot()
+  .then(() => (presenceEnabled() ? applyDiscordPresence(true) : null))
+  .catch((e) => showLogin(String(e)));

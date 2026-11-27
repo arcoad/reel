@@ -77,6 +77,7 @@ function renderSettings() {
       ${switchRow("close_to_tray", "Закрывать в трей", "Музыка продолжает играть", enabled("close_to_tray", true))}
       ${switchRow("save_position", "Продолжать с места", "Позиция и очередь сохраняются", enabled("save_position", true))}
       ${switchRow("update_notifications", "Уведомлять об обновлениях", "Окно при новой версии", enabled("update_notifications", true))}
+      ${switchRow("discord_presence", "Статус в Discord", "Название, автор и время трека", enabled("discord_presence", false))}
     </div>
 
     <div class="section-title">Моя волна</div>
@@ -152,6 +153,7 @@ function renderSettings() {
       button.setAttribute("aria-checked", String(next));
       await setSetting(key, next ? "1" : "0");
       if (key === "close_to_tray") await invoke("set_close_to_tray", { enabled: next });
+      if (key === "discord_presence") await applyDiscordPresence(next);
       if (key === "shuffle") state.shuffle = next;
       if (key === "text") {
         state.settings.now_hide_text = next ? "1" : "0";
