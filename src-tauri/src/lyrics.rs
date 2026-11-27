@@ -1,6 +1,7 @@
 // Reel backend — lyrics
 #![allow(unused_imports)]
 use crate::*;
+use std::future::Future;
 
 pub(crate) fn non_empty(value: Option<&str>) -> Option<String> {
     let text = value?.trim();
@@ -47,20 +48,56 @@ pub(crate) async fn lrclib_get(
     lrclib_prefer(&body, false)
 }
 
+fn normalize_lyrics_title(title: &str) -> String {
+    let lowered = title.to_lowercase();
+    let mut out = lowered;
+    for marker in [" mylancore", " mylan core", " prod.", " prod ", " (prod", " speed up", " slowed", " remix"] {
+        if let Some(pos) = out.find(marker) {
+            out.truncate(pos);
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn lyrics_score(row: &Value, artist: &str, title: &str, duration: Option<i64>) -> i64 {
+    let row_artist = row.get("artistName").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+    let row_title = normalize_lyrics_title(row.get("trackName").and_then(|v| v.as_str()).unwrap_or(""));
+    let want_artist = artist.to_lowercase();
+    let want_title = normalize_lyrics_title(title);
+    let mut score = 0;
+    if !row_artist.is_empty() && (row_artist.contains(&want_artist) || want_artist.contains(&row_artist)) {
+        score += 4;
+    }
+    if !row_title.is_empty() && row_title == want_title {
+        score += 4;
+    } else if !row_title.is_empty() && (row_title.contains(&want_title) || want_title.contains(&row_title)) {
+        score += 2;
+    }
+    if let Some(seconds) = duration {
+        if let Some(d) = row.get("duration").and_then(|v| v.as_f64()) {
+            let diff = (d - seconds as f64).abs();
+            if diff <= 2.0 {
+                score += 3;
+            } else if diff <= 6.0 {
+                score += 1;
+            }
+        }
+    }
+    if row.get("syncedLyrics").and_then(|v| v.as_str()).map(|s| !s.trim().is_empty()).unwrap_or(false) {
+        score += 1;
+    }
+    score
+}
+
 pub(crate) async fn lrclib_search(
     http: &reqwest::Client,
     artist: &str,
     title: &str,
     duration: Option<i64>,
 ) -> Option<String> {
-    let params = [
-        ("artist_name", artist),
-        ("track_name", title),
-        ("q", &format!("{artist} {title}")[..]),
-    ];
     let response = http
         .get("https://lrclib.net/api/search")
-        .query(&params[..2])
+        .query(&[("q", format!("{artist} {title}").as_str())])
         .header(reqwest::header::USER_AGENT, LYRICS_UA)
         .send()
         .await
@@ -70,16 +107,12 @@ pub(crate) async fn lrclib_search(
     }
     let rows: Value = response.json().await.ok()?;
     let rows = rows.as_array()?;
-    let pick = match duration {
-        Some(seconds) => rows.iter().find(|row| {
-            row.get("duration")
-                .and_then(|v| v.as_f64())
-                .map(|d| (d - seconds as f64).abs() <= 3.0)
-                .unwrap_or(false)
-        }),
-        None => rows.first(),
-    }?;
-    lrclib_prefer(pick, false)
+    let best = rows.iter().map(|row| (lyrics_score(row, artist, title, duration), row)).max_by_key(|(score, _)| *score)?;
+    if best.0 <= 0 {
+        return None;
+    }
+    log_line(&format!("lyrics: lrclib pick score {} for {artist} - {title}", best.0));
+    lrclib_prefer(best.1, false)
 }
 
 pub(crate) async fn resolve_external_lyrics(
@@ -97,14 +130,14 @@ pub(crate) async fn resolve_external_lyrics(
         .build()
         .ok()?;
     let tasks: Vec<_> = vec![
-        Box::pin(lrclib_get(&fast, artist, title, duration))
-            as std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send + '_>>,
-        Box::pin(lrclib_search(&fast, artist, title, duration)),
+        Box::pin(lrclib_search(&fast, artist, title, duration))
+            as std::pin::Pin<Box<dyn Future<Output = Option<String>> + Send + '_>>,
+        Box::pin(lrclib_get(&fast, artist, title, duration)),
     ]
     .into_iter()
     .map(|f| {
         Box::pin(async move { f.await.ok_or(()) })
-            as std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, ()>> + Send + '_>>
+            as std::pin::Pin<Box<dyn Future<Output = Result<String, ()>> + Send + '_>>
     })
     .collect::<Vec<_>>();
     let result = match futures_util::future::select_ok(tasks).await {

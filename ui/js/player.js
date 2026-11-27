@@ -138,6 +138,88 @@ function updateNowPlayIcon() {
   if (icon) icon.setAttribute("href", audio.paused ? "#i-play" : "#i-pause");
 }
 
+const paletteCache = new Map();
+
+function rgbToHsl(r, g, b) {
+  const rn = r / 255, gn = g / 255, bn = b / 255;
+  const max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6;
+  else if (max === gn) h = ((bn - rn) / d + 2) / 6;
+  else h = ((rn - gn) / d + 4) / 6;
+  return [h, s, l];
+}
+
+function paletteFromCanvas(img) {
+  const size = 24;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, size, size);
+  const { data } = ctx.getImageData(0, 0, size, size);
+  const buckets = new Map();
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 128) continue;
+    const [h, s, l] = rgbToHsl(data[i], data[i + 1], data[i + 2]);
+    if (l < 0.08 || l > 0.94 || s < 0.12) continue;
+    const key = `${Math.round(h * 11)}_${Math.round(s * 4)}_${Math.round(l * 4)}`;
+    const cell = buckets.get(key) || { h: 0, s: 0, l: 0, n: 0 };
+    cell.h += h; cell.s += s; cell.l += l; cell.n += 1;
+    buckets.set(key, cell);
+  }
+  const top = [...buckets.values()].sort((a, b) => b.n - a.n).slice(0, 2);
+  if (!top.length) return null;
+  return top.map((cell) => {
+    const h = Math.round((cell.h / cell.n) * 360);
+    const s = Math.round((cell.s / cell.n) * 100);
+    const l = Math.round((cell.l / cell.n) * 100);
+    return `hsl(${h} ${s}% ${l}%)`;
+  });
+}
+
+function paintCoverPalette(src) {
+  const view = el("now-view");
+  if (!view) return;
+  if (!src) {
+    view.style.removeProperty("--art-a");
+    view.style.removeProperty("--art-b");
+    return;
+  }
+  const cached = paletteCache.get(src);
+  if (cached !== undefined) {
+    applyPalette(view, cached);
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    let colors = null;
+    try {
+      colors = paletteFromCanvas(img);
+    } catch {}
+    paletteCache.set(src, colors);
+    const now = state.queue[state.index];
+    if (now && now.cover === src) applyPalette(view, colors);
+  };
+  img.onerror = () => paletteCache.set(src, null);
+  // Через тот же прокси, что и аудио: прямой VK-URL помечает canvas как tainted.
+  img.src = eqProxyUrl(src);
+}
+
+function applyPalette(view, colors) {
+  if (!colors) {
+    view.style.removeProperty("--art-a");
+    view.style.removeProperty("--art-b");
+    return;
+  }
+  view.style.setProperty("--art-a", colors[0]);
+  view.style.setProperty("--art-b", colors[1] || colors[0]);
+}
+
 function renderNowView() {
   const track = state.queue[state.index];
   if (!track) return;
@@ -149,6 +231,7 @@ function renderNowView() {
   cover.src = track.cover || "";
   cover.style.visibility = track.cover ? "visible" : "hidden";
   el("now-bg").style.backgroundImage = track.cover ? `url("${track.cover}")` : "none";
+  paintCoverPalette(track.cover);
   el("now-cur").textContent = fmtTime(audio.currentTime);
   el("now-dur").textContent = fmtTime(audio.duration || track.duration);
   el("now-seek").value = audio.duration ? String(Math.round((audio.currentTime / audio.duration) * 1000)) : "0";
@@ -197,10 +280,16 @@ function stopLyricsSync() {
   lyricsState.raf = 0;
 }
 
-const LYRIC_STEP = 44;
+const LYRIC_STEP = 64;
 
 function lyricStep() {
   return LYRIC_STEP;
+}
+
+function lyricOffset(track, index) {
+  if (index <= 0) return 0;
+  const line = track.children[index];
+  return line ? line.offsetTop : index * LYRIC_STEP;
 }
 
 function focusLyric(index) {
@@ -217,9 +306,7 @@ function focusLyric(index) {
     track.style.transform = "translateY(0)";
     return;
   }
-  const step = lyricStep();
-  const offset = index * step;
-  track.style.transform = `translateY(${-offset}px)`;
+  track.style.transform = `translateY(${-lyricOffset(track, index)}px)`;
 }
 
 function syncLyrics() {
@@ -273,13 +360,13 @@ function renderLyrics(text) {
     track.appendChild(node);
   }
   box.appendChild(track);
-  [...track.children].forEach((node, i) => {
-    node.style.top = `${i * LYRIC_STEP}px`;
+  lyricsState.raf = requestAnimationFrame(() => {
+    lyricsState.raf = 0;
+    if (parsed.timed) {
+      syncLyrics();
+      startLyricsSync();
+    }
   });
-  if (parsed.timed) {
-    syncLyrics();
-    startLyricsSync();
-  }
   return true;
 }
 
