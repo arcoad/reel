@@ -238,7 +238,7 @@ fn activity_payload(presence: &Presence) -> Value {
     }
     let mut timestamps = Map::new();
     timestamps.insert("start".into(), json!(presence.started_at));
-    if let Some(end) = presence.end_at {
+    if let Some(end) = presence.end_at.filter(|end| *end > presence.started_at) {
         timestamps.insert("end".into(), json!(end));
     }
     json!({
@@ -372,9 +372,11 @@ pub(crate) fn discord_presence_update(
     duration: Option<u64>,
 ) -> Result<(), String> {
     let presence = state.discord.lock().map_err(|_| "db lock".to_string())?;
+    let now = now_ms();
+    let started_at = started_at.min(now);
     let end_at = duration
         .filter(|d| *d > 0)
-        .and_then(|d| started_at.checked_add(d.saturating_mul(1000)));
+        .map(|d| now.saturating_add(d.saturating_mul(1000)));
     presence.update(Presence { details, state: status, cover, started_at, end_at });
     Ok(())
 }

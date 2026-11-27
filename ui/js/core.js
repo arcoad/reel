@@ -188,10 +188,11 @@ const CACHE_META = "reel_cache_meta";
 const themes = ["dark", "light", "amoled", "nord", "gruvbox"];
 
 function fmtTime(sec) {
-  sec = Math.max(0, Math.floor(sec || 0));
-  const m = Math.floor(sec / 60);
+  sec = Math.max(0, Math.floor(Number(sec) || 0));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
   const s = String(sec % 60).padStart(2, "0");
-  return `${m}:${s}`;
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
 
 function esc(s) {

@@ -6,12 +6,6 @@ function presenceEnabled() {
   return state.settings.discord_presence === "1";
 }
 
-function presenceStamp() {
-  const t = state.queue[state.index];
-  if (!t) return "";
-  return trackKey(t);
-}
-
 async function applyDiscordPresence(enabled) {
   try {
     if (!enabled) {
@@ -36,32 +30,46 @@ function presenceCover(t) {
   return /^https?:\/\//i.test(cover) ? cover : "";
 }
 
-async function pushDiscordPresence() {
-  if (!presenceEnabled()) return;
-  const t = state.queue[state.index];
-  if (!t || t.local_id) {
-    await invoke("discord_presence_clear").catch(() => {});
-    presenceKey = "";
-    return;
-  }
-  const key = trackKey(t);
-  const playing = !audio.paused;
-  if (!playing) {
-    if (presenceKey) {
-      presenceKey = "";
-      await invoke("discord_presence_clear").catch(() => {});
-    }
-    return;
-  }
-  if (presenceKey === key) return;
-  presenceKey = key;
-  presenceStartedAt = Math.floor(Date.now() / 1000) - Math.floor(audio.currentTime || 0);
+function presenceDuration(t) {
+  const value = Number(t && t.duration);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
+}
+
+function presenceRemaining(duration) {
+  const left = duration - (audio.currentTime || 0);
+  return left > 0.5 ? Math.ceil(left) : null;
+}
+
+async function sendPresence(t, remaining) {
   const details = [t.title, t.artist].filter(Boolean).join(" — ").slice(0, 128);
   await invoke("discord_presence_update", {
     details: details || "Без названия",
     status: "Слушает Reel",
     cover: presenceCover(t),
     startedAt: presenceStartedAt,
-    duration: t.duration || null,
+    duration: remaining,
   }).catch(() => {});
+}
+
+async function pushDiscordPresence() {
+  if (!presenceEnabled()) return;
+  const t = state.queue[state.index];
+  if (!t || t.local_id) {
+    presenceKey = "";
+    await invoke("discord_presence_clear").catch(() => {});
+    return;
+  }
+  if (audio.paused) {
+    if (presenceKey) {
+      presenceKey = "";
+      await invoke("discord_presence_clear").catch(() => {});
+    }
+    return;
+  }
+  const key = trackKey(t);
+  if (presenceKey !== key) {
+    presenceKey = key;
+    presenceStartedAt = Math.floor(Date.now() / 1000) - Math.floor(audio.currentTime || 0);
+  }
+  await sendPresence(t, presenceRemaining(presenceDuration(t)));
 }

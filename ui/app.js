@@ -137,6 +137,8 @@ function bind() {
   el("seek").addEventListener("input", () => {
     if (audio.duration) audio.currentTime = (Number(el("seek").value) / 1000) * audio.duration;
     paintRange(el("seek"));
+    presenceKey = "";
+    pushDiscordPresence();
     schedulePlaybackSave();
   });
   el("volume").addEventListener("input", () => {
@@ -207,6 +209,8 @@ function bind() {
   });
   el("now-seek").addEventListener("input", () => {
     if (audio.duration) audio.currentTime = (Number(el("now-seek").value) / 1000) * audio.duration;
+    presenceKey = "";
+    pushDiscordPresence();
   });
   el("update-now").addEventListener("click", installUpdate);
   el("update-later").addEventListener("click", async () => {
