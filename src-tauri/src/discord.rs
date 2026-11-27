@@ -12,7 +12,7 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_PIPE_BUSY, GENERIC_READ, GENERIC_WRITE, GetLastError, INVALID_HANDLE_VALUE,
 };
 #[cfg(windows)]
-use windows_sys::Win32::Storage::FileSystem::{CreateFileW, ReadFile, WriteFile};
+use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_FLAG_OVERLAPPED, ReadFile, WriteFile};
 #[cfg(windows)]
 use windows_sys::Win32::System::Pipes::{NMPWAIT_WAIT_FOREVER, WaitNamedPipeW};
 
@@ -101,32 +101,34 @@ fn run(rx: Receiver<Presence>, stop: Arc<AtomicBool>) {
             continue;
         }
         let mut last_sent = 0;
+        let mut pending: Option<Presence> = None;
         loop {
             if stop.load(Ordering::SeqCst) {
                 conn.close();
                 return;
             }
-            match rx.recv_timeout(Duration::from_millis(500)) {
-                Ok(presence) => {
-                    let empty = presence.details.is_empty() && presence.state.is_empty();
-                    if empty || conn.alive {
-                        conn.set_activity(&presence);
-                    }
-                    last = if empty { None } else { Some(presence) };
-                    last_sent = now_ms();
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            match rx.try_recv() {
+                Ok(presence) => pending = Some(presence),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     conn.close();
                     return;
                 }
             }
-            if let Some(presence) = &last {
-                if now_ms() - last_sent >= 15_000 {
-                    conn.set_activity(presence);
-                    last_sent = now_ms();
+            let due = now_ms() - last_sent >= 2_000;
+            if let Some(presence) = pending.take().filter(|_| due || last.is_none()) {
+                let empty = presence.details.is_empty() && presence.state.is_empty();
+                if empty || conn.alive {
+                    conn.set_activity(&presence);
                 }
+                last = if empty { None } else { Some(presence) };
+                last_sent = now_ms();
             }
+            if !conn.alive {
+                conn.close();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
 }
@@ -207,6 +209,27 @@ impl Connection {
         });
         if !self.send(1, &payload) {
             self.alive = false;
+            return;
+        }
+        // Discord отвечает на каждый SET_ACTIVITY: ответы нужно вычитывать,
+        // иначе пайп забивается и апдейты применяются с задержкой.
+        self.drain();
+    }
+
+    fn drain(&mut self) {
+        for _ in 0..4 {
+            match self.read() {
+                Some((_, value)) => {
+                    if let Some(code) = value.get("code").and_then(|v| v.as_i64()) {
+                        if code != 0 {
+                            log_line(&format!("discord: rejected: {value}"));
+                            self.alive = false;
+                            return;
+                        }
+                    }
+                }
+                None => return,
+            }
         }
     }
 
@@ -263,7 +286,7 @@ fn open_pipe(path: &str) -> Option<usize> {
                 0,
                 std::ptr::null(),
                 3,
-                0,
+                FILE_FLAG_OVERLAPPED,
                 std::ptr::null_mut(),
             )
         };
@@ -305,8 +328,11 @@ fn write_all(handle: usize, data: &[u8]) -> bool {
 
 #[cfg(windows)]
 fn read_exact(handle: usize, buf: &mut [u8]) -> bool {
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_IO_PENDING};
+    use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
     let mut offset = 0;
     while offset < buf.len() {
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
         let mut read: u32 = 0;
         let ok = unsafe {
             ReadFile(
@@ -314,10 +340,21 @@ fn read_exact(handle: usize, buf: &mut [u8]) -> bool {
                 buf[offset..].as_mut_ptr(),
                 (buf.len() - offset) as u32,
                 &mut read,
-                std::ptr::null_mut(),
+                &mut overlapped,
             )
         };
-        if ok == 0 || read == 0 {
+        if ok == 0 {
+            if unsafe { GetLastError() } != ERROR_IO_PENDING {
+                return false;
+            }
+            let mut got: u32 = 0;
+            let waited = unsafe { GetOverlappedResult(handle as _, &overlapped, &mut got, 1) };
+            if waited == 0 || got == 0 {
+                return false;
+            }
+            read = got;
+        }
+        if read == 0 {
             return false;
         }
         offset += read as usize;

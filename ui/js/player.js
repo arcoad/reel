@@ -300,7 +300,7 @@ function focusLyric(index) {
   if (!track) return;
   [...track.children].forEach((line, i) => {
     line.classList.toggle("active", i === index);
-    if (i !== index) line.style.setProperty("--fill", "0%");
+    line.style.setProperty("--fill", "0%");
   });
   if (index < 0) {
     track.style.transform = "translateY(0)";
@@ -482,6 +482,7 @@ function displayTrack(t) {
   if (nowLike) nowLike.classList.toggle("on", liked);
   const nowDislike = el("now-dislike");
   if (nowDislike) nowDislike.classList.toggle("on", disliked);
+  updateMediaSession(t);
 }
 
 function playbackSnapshot() {

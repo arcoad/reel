@@ -128,7 +128,7 @@ function renderSettings() {
     </div>
 
     <div class="section-title">О приложении</div>
-    <div class="setting-row"><div><div class="setting-label">Reel <span id="app-version">1.1.3</span></div><div class="setting-desc">Rust + Tauri · музыкальный плеер</div></div>
+    <div class="setting-row"><div><div class="setting-label">Reel <span id="app-version">1.2.0</span></div><div class="setting-desc">Rust + Tauri · музыкальный плеер</div></div>
       <button class="ghost" data-link="https://github.com/arcoad/reel">GitHub</button>
     </div>
   </div>`;

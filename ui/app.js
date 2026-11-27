@@ -114,13 +114,16 @@ function bind() {
   audio.addEventListener("play", () => {
     setPlayingIcon();
     pushDiscordPresence();
+    updateMediaState("playing");
   });
   audio.addEventListener("pause", () => {
     setPlayingIcon();
     pushDiscordPresence();
+    updateMediaState("paused");
     savePlayback();
   });
   audio.addEventListener("ended", () => next(true));
+  bindMediaSession();
   audio.addEventListener("loadedmetadata", () => {
     el("dur").textContent = fmtTime(audio.duration);
     el("now-dur").textContent = fmtTime(audio.duration);
@@ -273,6 +276,60 @@ function bind() {
       runHotkeyAction(action);
     }
   });
+}
+
+function bindMediaSession() {
+  if (!("mediaSession" in navigator)) return;
+  const handlers = {
+    play: () => {
+      if (!state.queue.length) return;
+      if (!audio.src && !state.hls) {
+        const at = state.resumePosition;
+        state.resumePosition = 0;
+        playCurrent(at);
+        return;
+      }
+      audio.play().catch(() => {});
+    },
+    pause: () => audio.pause(),
+    previoustrack: () => prev(),
+    nexttrack: () => next(false),
+    seekto: (details) => {
+      if (Number.isFinite(details.seekTime) && audio.duration) audio.currentTime = details.seekTime;
+    },
+    seekbackward: (details) => {
+      const offset = details.seekOffset || 10;
+      audio.currentTime = Math.max(0, audio.currentTime - offset);
+    },
+    seekforward: (details) => {
+      const offset = details.seekOffset || 10;
+      audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + offset);
+    },
+  };
+  for (const [action, handler] of Object.entries(handlers)) {
+    try {
+      navigator.mediaSession.setActionHandler(action, handler);
+    } catch {}
+  }
+}
+
+function updateMediaSession(t) {
+  if (!("mediaSession" in navigator) || !t || !window.MediaMetadata) return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: t.title || "Без названия",
+      artist: t.artist || "",
+      album: (t.album && t.album.title) || "",
+      artwork: t.cover ? [{ src: t.cover }] : [],
+    });
+  } catch {}
+}
+
+function updateMediaState(kind) {
+  if (!("mediaSession" in navigator)) return;
+  try {
+    navigator.mediaSession.playbackState = kind;
+  } catch {}
 }
 
 bind();

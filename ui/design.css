@@ -490,24 +490,33 @@ svg { width: 18px; height: 18px; display: block; }
 .now-right { display: flex; flex-direction: column; gap: 20px; height: min(60vh, 520px); }
 .lyrics-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
 .lyrics {
-  flex: 1; overflow: hidden; position: relative;
-  -webkit-mask-image: linear-gradient(transparent, #000 16%, #000 78%, transparent);
-  mask-image: linear-gradient(transparent, #000 16%, #000 78%, transparent);
+  position: relative; flex: 1; min-height: 0;
+  height: 232px; max-height: 232px; overflow: hidden;
+  -webkit-mask-image: linear-gradient(transparent, #000 22%, #000 74%, transparent);
+  mask-image: linear-gradient(transparent, #000 22%, #000 74%, transparent);
 }
-.lyrics-track { position: absolute; top: 50%; left: 0; right: 0; height: 0; transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1); }
+.lyrics-track {
+  position: absolute; top: 116px; left: 0; right: 0;
+  display: block; height: 0;
+  transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
 .lyrics-line {
-  position: absolute; left: 0; right: 0; min-height: 64px; padding: 10px 14px;
+  display: block; width: 100%; min-height: 76px; padding: 10px 16px;
   text-align: center; font-size: 17px; line-height: 1.45; color: var(--text-2);
   white-space: normal; overflow-wrap: break-word;
-  opacity: 0.34; filter: blur(1.4px);
+  opacity: 0.3; filter: blur(1.1px);
   transition: opacity 320ms var(--ease), filter 320ms var(--ease), color 320ms var(--ease);
 }
 .lyrics-line.active {
   font-family: Georgia, "Times New Roman", serif;
   font-size: 30px; font-weight: 700; letter-spacing: -0.01em;
-  opacity: 1; filter: none;
-  background: linear-gradient(to right, var(--accent) 0%, var(--accent) var(--fill, 0%), var(--text) var(--fill, 0%), var(--text) 100%);
+  opacity: 1; filter: none; color: var(--text);
+  background-image: linear-gradient(to right, var(--accent) 0%, var(--accent) var(--fill, 0%), var(--text) var(--fill, 0%), var(--text) 100%);
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+.lyrics-line:not(.active) {
+  background-image: none;
+  -webkit-text-fill-color: currentColor;
 }
 .lyrics-timed .lyrics-line { transform: none; }
 .now-view.hide-text .now-content { grid-template-columns: minmax(320px, 420px); }
