@@ -39,7 +39,12 @@ const state = {
     mixOffset: 0,
     mixExhausted: false,
     mixId: "common",
+    mixDry: 0,
+    options: {},
   },
+  dislikedKeys: new Set(),
+  waveFilters: null,
+  waveFiltersLoading: null,
   libraryKeys: new Set(),
   loginPoll: null,
   loginBusy: false,
@@ -256,8 +261,27 @@ function normTrack(t) {
     cover: coverOf(t),
     album,
     artists,
-    disliked: !!t.dislike,
+    disliked: isDislikedKey(`${t.id}_${t.owner_id}`) || !!t.dislike,
   };
+}
+
+function isDislikedKey(key) {
+  return state.dislikedKeys.has(key);
+}
+
+function loadDislikedKeys() {
+  try {
+    const list = JSON.parse(state.settings.disliked_tracks || "[]");
+    state.dislikedKeys = new Set(Array.isArray(list) ? list.map(String) : []);
+  } catch {
+    state.dislikedKeys = new Set();
+  }
+}
+
+async function storeDislikedKeys() {
+  const value = JSON.stringify([...state.dislikedKeys]);
+  state.settings.disliked_tracks = value;
+  await invoke("settings_set", { key: "disliked_tracks", value });
 }
 
 function trackKey(t) {
@@ -354,6 +378,7 @@ async function loadSettings() {
   }
   state.settings = s;
   loadRecent();
+  loadDislikedKeys();
   applyTheme();
 }
 

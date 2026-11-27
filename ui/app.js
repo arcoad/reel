@@ -210,6 +210,9 @@ function bind() {
     el("update-modal").close();
   });
   document.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => b.closest("dialog").close()));
+  el("wave-modal").addEventListener("click", (e) => {
+    if (e.target.closest("dialog") === e.target && !e.target.closest(".dialog-head, .dialog-list, .dialog-actions")) e.target.close();
+  });
   document.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("click", () => applyPreset(b.dataset.preset)));
 
   document.addEventListener("keydown", (e) => {

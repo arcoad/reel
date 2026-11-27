@@ -356,6 +356,8 @@ fn main() {
             audio_album,
             audio_by_id,
             stream_mix_audios,
+            stream_mix_settings,
+            playlist_tracks,
             lyrics,
             external_lyrics,
             account_info,

@@ -78,9 +78,13 @@ function applyDisliked(key, value) {
 
 async function setTrackDisliked(t, value) {
   if (!t || t.local_id) return false;
+  const key = trackKey(t);
   try {
     await invoke("audio_dislike", { audioId: t.id, ownerId: t.owner_id, dislike: value });
-    applyDisliked(trackKey(t), value);
+    if (value) state.dislikedKeys.add(key);
+    else state.dislikedKeys.delete(key);
+    await storeDislikedKeys();
+    applyDisliked(key, value);
     return true;
   } catch (e) {
     toast(`Не удалось: ${e}`);
@@ -91,12 +95,10 @@ async function setTrackDisliked(t, value) {
 async function toggleTrackDislike(t) {
   if (!t) return;
   const disliked = !t.disliked;
-  if (await setTrackDisliked(t, disliked)) {
-    toast(disliked ? "Дизлайк поставлен" : "Дизлайк убран");
-    if (disliked && state.queue[state.index] && trackKey(state.queue[state.index]) === trackKey(t)) {
-      next(false);
-    }
-  }
+  if (!(await setTrackDisliked(t, disliked))) return;
+  toast(disliked ? "Дизлайк поставлен" : "Дизлайк убран");
+  const cur = state.queue[state.index];
+  if (disliked && cur && trackKey(cur) === trackKey(t)) next(false);
 }
 
 async function togglePlayerDislike() {

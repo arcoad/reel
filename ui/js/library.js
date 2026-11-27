@@ -374,24 +374,21 @@ async function loadPlaylists(resetFilter = false) {
 }
 
 function playlistPage(res) {
-  const section = res.section || {};
-  const blocks = section.blocks || [];
-  const block = blocks.find((b) => (b.audios_ids || []).length);
-  return {
-    tracks: orderedByBlocks((res.audios || []).map(normTrack), blocks),
-    nextFrom: section.next_from || (block && block.next_from) || null,
-  };
+  const items = Array.isArray(res) ? res : res.items || res.audios || [];
+  const total = Number((!Array.isArray(res) && res.count) || items.length);
+  const tracks = items.map(normTrack);
+  const offset = Number((!Array.isArray(res) && res.offset) || 0);
+  return { tracks, total, nextOffset: offset + items.length < total ? offset + items.length : null };
 }
 
-function renderPlaylistView(playlist, res, append) {
-  const page = playlistPage(res);
+function renderPlaylistView(playlist, page, append) {
   const keep = append && state.playlistSection && state.playlistSection.id === playlist.sectionId ? state.playlistSection.tracks : [];
   const seen = new Set(keep.map(trackKey));
   const tracks = keep.concat(page.tracks.filter((t) => !seen.has(trackKey(t))));
-  state.playlistSection = { id: playlist.sectionId, playlist, tracks, nextFrom: page.nextFrom };
+  state.playlistSection = { id: playlist.sectionId, playlist, tracks, nextOffset: page.nextOffset };
   const kindLabel = playlist.kind === "own" ? "Мой плейлист" : playlist.kind === "vk" ? "Подборка VK" : "Сохранённый плейлист";
-  const count = page.nextFrom ? `${tracks.length}+` : String(tracks.length);
-  const declared = playlist.count && playlist.count !== tracks.length ? ` · заявлено ${playlist.count}` : "";
+  const count = page.nextOffset ? `${tracks.length}+` : String(tracks.length);
+  const declared = page.total > tracks.length && !page.nextOffset ? ` · заявлено ${page.total}` : "";
   el("content").innerHTML =
     `<button class="btn btn-ghost" id="back-pl" style="margin-bottom:24px">${icon("back")} Плейлисты</button>
     <div class="detail-hero">
@@ -410,7 +407,7 @@ function renderPlaylistView(playlist, res, append) {
     (tracks.length
       ? `<div class="track-list">${tracks.map((t, i) => trackRow(t, i, tracks)).join("")}</div>`
       : `<div class="empty">В этом плейлисте пока нет треков</div>`) +
-    (page.nextFrom ? `<div class="row" style="margin-top:16px"><button class="btn btn-ghost" id="pl-more">Показать ещё</button></div>` : "");
+    (page.nextOffset ? `<div class="row" style="margin-top:16px"><button class="btn btn-ghost" id="pl-more">Показать ещё</button></div>` : "");
   bindTracks(el("content"), tracks);
   el("back-pl").addEventListener("click", () => openView("playlists"));
   el("pl-play").addEventListener("click", () => playWholePlaylist(playlist, false));
@@ -426,8 +423,8 @@ function renderPlaylistView(playlist, res, append) {
       more.disabled = true;
       more.textContent = "Загрузка…";
       try {
-        const next = await fetchPlaylistSection(playlist, state.playlistSection.nextFrom);
-        renderPlaylistView(playlist, next, true);
+        const next = await fetchPlaylistSection(playlist, state.playlistSection.nextOffset);
+        renderPlaylistView(playlist, playlistPage(next), true);
       } catch (e) {
         more.disabled = false;
         more.textContent = `Ошибка: ${e}`;
@@ -435,21 +432,17 @@ function renderPlaylistView(playlist, res, append) {
     });
 }
 
-async function fetchPlaylistSection(playlist, startFrom) {
-  const candidates = [playlist.sectionId];
-  if (Number.isFinite(playlist.owner_id) && Number.isFinite(playlist.id)) {
-    const alternate = `playlist${playlist.owner_id}_${playlist.id}`;
-    if (!candidates.includes(alternate)) candidates.push(alternate);
+async function fetchPlaylistSection(playlist, offset = 0) {
+  if (!Number.isFinite(playlist.owner_id) || !Number.isFinite(playlist.id)) {
+    throw new Error("Плейлист недоступен");
   }
-  let lastError = null;
-  for (const sectionId of candidates) {
-    try {
-      return await invoke("catalog_get_section", { sectionId, startFrom });
-    } catch (e) {
-      lastError = e;
-    }
-  }
-  throw lastError || new Error("Плейлист недоступен");
+  return invoke("playlist_tracks", {
+    ownerId: playlist.owner_id,
+    playlistId: playlist.id,
+    accessKey: playlist.access_key || null,
+    count: 100,
+    offset: offset || 0,
+  });
 }
 
 async function openPlaylist(playlist, fromBack = false) {
@@ -459,9 +452,9 @@ async function openPlaylist(playlist, fromBack = false) {
   setViewChrome("playlists");
   el("content").innerHTML = `<div class="empty">Загрузка плейлиста…</div>`;
   try {
-    const res = await fetchPlaylistSection(playlist, null);
+    const res = await fetchPlaylistSection(playlist, 0);
     if (req !== state.playlistOpenReq || state.view !== "playlists") return;
-    renderPlaylistView(playlist, res, false);
+    renderPlaylistView(playlist, playlistPage(res), false);
   } catch (e) {
     if (req !== state.playlistOpenReq || state.view !== "playlists") return;
     el("content").innerHTML =
@@ -661,18 +654,17 @@ async function loadAllPlaylistTracks(playlist) {
   if (cached && cached.length) return cached;
   const seen = new Set();
   const tracks = [];
-  let start = null;
+  let offset = 0;
   for (let page = 0; page < 40; page++) {
-    const res = await fetchPlaylistSection(playlist, start);
-    const chunk = playlistPage(res);
+    const chunk = playlistPage(await fetchPlaylistSection(playlist, offset));
     for (const track of chunk.tracks) {
       const key = trackKey(track);
       if (seen.has(key)) continue;
       seen.add(key);
       tracks.push(track);
     }
-    if (!chunk.nextFrom || chunk.nextFrom === start || !chunk.tracks.length) break;
-    start = chunk.nextFrom;
+    if (chunk.nextOffset === null || !chunk.tracks.length) break;
+    offset = chunk.nextOffset;
   }
   state.playlistCache.set(playlist.sectionId, tracks);
   return tracks;

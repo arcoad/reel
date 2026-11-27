@@ -82,12 +82,8 @@ function renderSettings() {
     <div class="section-title">Моя волна</div>
     <div class="setting-list">
       <div class="setting-row">
-        <div><div class="setting-label">Новые треки</div><div class="setting-desc">Сколько треков из рекомендаций добавлять в каждый блок волны</div></div>
-        <div class="row" style="gap:8px">
-          <button class="ghost" id="wave-disc-down" aria-label="Меньше">−</button>
-          <span id="wave-disc-val" style="min-width:28px;text-align:center;font-variant-numeric:tabular-nums">${esc(String(waveDiscoveryQuota()))}</span>
-          <button class="ghost" id="wave-disc-up" aria-label="Больше">+</button>
-        </div>
+        <div><div class="setting-label">Фильтры подборки</div><div class="setting-desc">Настроение, язык, жанры — применяются один раз</div></div>
+        <button class="ghost" id="wave-setup-open">Настроить</button>
       </div>
     </div>
 
@@ -138,17 +134,8 @@ function renderSettings() {
 
   el("theme-select").addEventListener("change", (e) => setSetting("theme", e.target.value));
   el("accent-input").addEventListener("input", (e) => setSetting("accent", e.target.value));
-  const waveDiscVal = el("wave-disc-val");
-  const waveDiscUp = el("wave-disc-up");
-  const waveDiscDown = el("wave-disc-down");
-  const clampWaveDisc = (v) => Math.max(0, Math.min(5, Math.round(v)));
-  const applyWaveDisc = async (delta) => {
-    const next = clampWaveDisc((Number(state.settings.wave_discovery ?? "1") || 0) + delta);
-    await setSetting("wave_discovery", String(next));
-    if (waveDiscVal) waveDiscVal.textContent = String(next);
-  };
-  if (waveDiscUp) waveDiscUp.addEventListener("click", () => applyWaveDisc(1));
-  if (waveDiscDown) waveDiscDown.addEventListener("click", () => applyWaveDisc(-1));
+  const waveSetup = el("wave-setup-open");
+  if (waveSetup) waveSetup.addEventListener("click", openWaveSetup);
   el("content").querySelectorAll("[data-hotkey]").forEach((button) => {
     button.addEventListener("click", () => beginHotkeyCapture(button.dataset.hotkey, button));
   });

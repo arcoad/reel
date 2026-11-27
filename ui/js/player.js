@@ -656,7 +656,7 @@ async function next(auto = false) {
   if (n >= 0 && state.queue[n]?.disliked) n = -1;
   state.index = start;
   if (n < 0 || (n === start && auto)) {
-    if (state.repeat === "track") {
+    if (state.repeat === "track" && !state.queue[start]?.disliked) {
       audio.currentTime = 0;
       audio.play();
       return;

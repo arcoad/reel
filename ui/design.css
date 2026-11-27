@@ -131,6 +131,11 @@ svg { width: 18px; height: 18px; display: block; }
   background: var(--surface-raised); color: var(--text-2); font-size: 12px;
 }
 .chip:hover, .chip.active { color: var(--text); border-color: var(--hairline-strong); background: var(--surface-hover); }
+.wave-filter-group { padding: 10px 12px; }
+.wave-filter-group + .wave-filter-group { border-top: 1px solid var(--hairline); }
+.wave-filter-title { font-size: 12px; color: var(--text-2); margin-bottom: 8px; }
+.wave-filter-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.wave-filter-chips .chip.active { border-color: var(--accent); color: var(--accent); }
 
 /* ---------- shell ---------- */
 .shell {

@@ -216,6 +216,7 @@ function normalizePlaylist(p, userId) {
     title: p.title || p.name || "Без названия",
     count: Number(p.count || p.size || p.num_audios || 0),
     kind: playlistKind(p, userId),
+    access_key: p.access_key || "",
     sectionId: hasSection
       ? p.section_id
       : Number.isFinite(id) && Number.isFinite(owner)
@@ -528,17 +529,18 @@ async function renderHome() {
       <div class="hero-copy">
         <div class="eyebrow">Персональное</div>
         <h1>Твоя <em class="wave-word">волна</em><br>не кончается</h1>
-        <p>Собрана из твоей музыки и продолжается сама — трек за треком, без пауз и повторов.</p>
+        <p>Подборка рекомендаций VK продолжается сама — трек за треком, без пауз и повторов.</p>
         <div class="hero-actions">
           <button class="btn btn-primary" id="wave-play">${icon("play")} Слушать волну</button>
-          <button class="btn btn-ghost" data-view="library">Моя музыка</button>
+          <button class="btn btn-ghost" id="wave-setup">${icon("settings")} Настроить</button>
         </div>
       </div>
       <div class="hero-art" aria-hidden="true"><div class="hero-vinyl"></div><div class="hero-sleeve"><span>REEL · VOL. 01</span></div></div>
     </div>
     <div class="section-title">Недавно прослушанное <small>${state.recent.length} треков</small></div>
     <div class="cards-row">${cards}</div>`;
-  el("wave-play").addEventListener("click", playWave);
+  el("wave-play").addEventListener("click", () => playWave());
+  el("wave-setup").addEventListener("click", openWaveSetup);
   el("content").querySelectorAll(".media-card[data-recent]").forEach((card) => {
     const play = () => playList(state.recent, Number(card.dataset.recent));
     card.addEventListener("click", (e) => {
@@ -584,11 +586,88 @@ async function refreshRecentCovers() {
 
 const WAVE_CHUNK = 10;
 
-function waveDiscoveryQuota(size = WAVE_CHUNK) {
-  const raw = Number(state.settings.wave_discovery ?? "1");
-  const max = Math.max(0, size - 1);
-  if (!Number.isFinite(raw)) return 1;
-  return Math.max(0, Math.min(max, Math.round(raw)));
+const WAVE_GENRES = [
+  ["pop", "Поп"],
+  ["hip_hop", "Хип-хоп"],
+  ["rock", "Рок"],
+  ["electronic", "Электроника"],
+  ["indie", "Инди"],
+  ["metal", "Метал"],
+  ["folk", "Фолк"],
+  ["phonk", "Фонк"],
+  ["jazz", "Джаз"],
+  ["funk", "Фанк"],
+  ["ambient", "Эмбиент"],
+  ["punk", "Панк"],
+];
+
+async function loadWaveFilters() {
+  if (state.waveFilters) return state.waveFilters;
+  if (state.waveFiltersLoading) return state.waveFiltersLoading;
+  state.waveFiltersLoading = (async () => {
+    const groups = [{ id: "additionals", title: "Жанры", options: WAVE_GENRES.map(([id, title]) => ({ id, title })) }];
+    try {
+      const res = await invoke("stream_mix_settings", { mixId: "common" });
+      const settings = (res && res.settings) || {};
+      for (const category of settings.mix_categories || []) {
+        const options = (category.options || []).map((o) => ({ id: o.id, title: o.title }));
+        if (options.length) groups.unshift({ id: category.id, title: category.title, options });
+      }
+    } catch {}
+    state.waveFilters = groups;
+    return groups;
+  })();
+  try {
+    return await state.waveFiltersLoading;
+  } finally {
+    state.waveFiltersLoading = null;
+  }
+}
+
+function waveFiltersMarkup(groups, selected) {
+  return groups
+    .map(
+      (group) => `<div class="wave-filter-group">
+        <div class="wave-filter-title">${esc(group.title)}</div>
+        <div class="wave-filter-chips">${group.options
+          .map(
+            (option) =>
+              `<button class="chip ${selected[group.id] === option.id ? "active" : ""}" data-group="${esc(group.id)}" data-option="${esc(option.id)}">${esc(option.title)}</button>`,
+          )
+          .join("")}</div>
+      </div>`,
+    )
+    .join("");
+}
+
+async function openWaveSetup() {
+  const box = el("wave-filters");
+  const modal = el("wave-modal");
+  if (!box || !modal) return;
+  const selected = { ...(state.wave.options || {}) };
+  box.innerHTML = `<div class="empty">Загружаю настройки…</div>`;
+  modal.showModal();
+  const groups = await loadWaveFilters();
+  const paint = () => {
+    box.innerHTML = waveFiltersMarkup(groups, selected);
+    box.querySelectorAll(".chip[data-option]").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const group = chip.dataset.group;
+        if (selected[group] === chip.dataset.option) delete selected[group];
+        else selected[group] = chip.dataset.option;
+        paint();
+      });
+    });
+  };
+  paint();
+  el("wave-reset").onclick = () => {
+    for (const key of Object.keys(selected)) delete selected[key];
+    paint();
+  };
+  el("wave-apply").onclick = () => {
+    modal.close();
+    playWave(selected);
+  };
 }
 
 function shuffleCopy(list) {
@@ -602,60 +681,13 @@ function shuffleCopy(list) {
   return arr;
 }
 
-async function ensureMyMusic(force = false) {
-  if (!force && Array.isArray(state.myMusic) && state.myMusic.length) return state.myMusic;
-  if (state.myMusicLoading) return state.myMusicLoading;
-  state.myMusicLoading = (async () => {
-    try {
-      const res = await invoke("catalog_get_audio", { ownerId: state.user?.id ?? null });
-      if (!state.user?.id) {
-        const inferred = inferUid(res);
-        if (inferred) state.user = { ...(state.user || {}), id: inferred };
-      }
-      state.playlists = normalizePlaylists(res.playlists, state.user?.id);
-      const lib = librarySection((res.catalog && res.catalog.sections) || []);
-      if (!lib) {
-        state.myMusic = state.myMusic || [];
-        return state.myMusic;
-      }
-      // Первая страница — чтобы волна стартовала сразу; остальное догружаем в фоне.
-      const first = await loadSectionPage(lib.id, null);
-      state.myMusic = first.tracks.slice();
-      const pool = state.myMusic;
-      (async () => {
-        const seen = new Set(pool.map(trackKey));
-        let start = first.nextFrom;
-        for (let page = 0; page < 40 && start; page++) {
-          const chunk = await loadSectionPage(lib.id, start);
-          for (const track of chunk.tracks) {
-            const key = trackKey(track);
-            if (seen.has(key)) continue;
-            seen.add(key);
-            pool.push(track);
-          }
-          if (!chunk.tracks.length || chunk.nextFrom === start) break;
-          start = chunk.nextFrom;
-        }
-      })().catch(() => {});
-      return pool;
-    } catch {
-      state.myMusic = state.myMusic || [];
-      return state.myMusic;
-    } finally {
-      state.myMusicLoading = null;
-    }
-  })();
-  return state.myMusicLoading;
-}
-
-function takeFromLibrary(want, out, taken) {
+function takeFromLibrary(target, out, taken) {
   const w = state.wave;
   const pool = state.myMusic || [];
-  if (!pool.length || want <= 0) return out;
-  let guard = Math.max(8, want * 8);
-  while (out.length < want && guard-- > 0) {
+  if (!pool.length || target <= 0) return out;
+  let guard = Math.max(8, target * 8);
+  while (out.length < target && guard-- > 0) {
     if (!w.deck.length) {
-      // В волне каждый трек должен встречаться один раз за всю сессию.
       w.deck = shuffleCopy(pool.filter((t) => !w.used.has(trackKey(t))));
       if (!w.deck.length) break;
     }
@@ -687,48 +719,46 @@ async function mixTracks(raw) {
 
 async function takeFromMix(want, out, taken) {
   const w = state.wave;
-  if (want <= 0 || w.mixExhausted) return out;
-  try {
-    const res = await invoke("stream_mix_audios", {
-      count: Math.max(want * 2, 10),
-      offset: w.mixOffset,
-      mixId: w.mixId,
-    });
-    const list = await mixTracks(Array.isArray(res) ? res : res.audios || []);
-    let added = 0;
-    for (const track of list) {
-      if (added >= want) break;
-      const key = trackKey(track);
-      if (w.used.has(key) || taken.has(key) || w.seenMix.has(key) || track.disliked) continue;
-      w.seenMix.add(key);
-      w.used.add(key);
-      taken.add(key);
-      out.push(track);
-      added++;
+  const options = Object.keys(w.options || {}).length ? JSON.stringify(w.options) : null;
+  while (out.length < want && !w.mixExhausted) {
+    const before = out.length;
+    try {
+      const res = await invoke("stream_mix_audios", {
+        count: Math.max(want * 2, 10),
+        offset: w.mixOffset,
+        mixId: w.mixId,
+        options,
+      });
+      const list = await mixTracks(Array.isArray(res) ? res : res.audios || []);
+      for (const track of list) {
+        if (out.length >= want) break;
+        const key = trackKey(track);
+        if (w.used.has(key) || taken.has(key) || w.seenMix.has(key) || track.disliked) continue;
+        w.seenMix.add(key);
+        w.used.add(key);
+        taken.add(key);
+        out.push(track);
+      }
+      if (list.length) w.mixOffset += list.length;
+      if (out.length === before) {
+        w.mixDry += 1;
+        if (!list.length || w.mixDry >= 3) w.mixExhausted = true;
+      } else {
+        w.mixDry = 0;
+      }
+    } catch {
+      w.mixExhausted = true;
     }
-    if (list.length) w.mixOffset += list.length;
-    if (!added) {
-      w.mixDry = (w.mixDry || 0) + 1;
-      if (!list.length || w.mixDry >= 2) w.mixExhausted = true;
-    } else {
-      w.mixDry = 0;
-    }
-  } catch {
-    w.mixExhausted = true;
+    if (out.length === before) break;
   }
   return out;
 }
 
-// Волна строится из «Моей музыки», а рекомендации VK подмешиваются редко —
-// иначе подборка скатывается к тому, что и так играло недавно.
 async function buildWaveChunk(size = WAVE_CHUNK) {
   const taken = new Set();
   const out = [];
-  const hasLibrary = (state.myMusic || []).length > 0;
-  const mixQuota = hasLibrary ? waveDiscoveryQuota(size) : size;
-  if (hasLibrary) takeFromLibrary(size - mixQuota, out, taken);
-  if (out.length < size) await takeFromMix(size - out.length, out, taken);
-  if (hasLibrary && out.length < size) takeFromLibrary(size - out.length, out, taken);
+  await takeFromMix(size, out, taken);
+  if (out.length < size) takeFromLibrary(size, out, taken);
   return out;
 }
 
@@ -758,7 +788,7 @@ async function maybeExtendWave() {
   await ensureWaveMore(WAVE_CHUNK);
 }
 
-async function playWave() {
+async function playWave(options = null) {
   const button = el("wave-play");
   if (button) {
     button.disabled = true;
@@ -766,7 +796,6 @@ async function playWave() {
   }
   try {
     if (state.accountReady) await state.accountReady;
-    const library = await ensureMyMusic();
     const w = state.wave;
     w.active = true;
     w.extending = false;
@@ -777,10 +806,11 @@ async function playWave() {
     w.mixOffset = 0;
     w.mixExhausted = false;
     w.mixDry = 0;
+    w.options = options || {};
     const first = await buildWaveChunk(14);
     if (!first.length) {
       w.active = false;
-      toast("Волна не собралась: нет треков ни в «Моей музыке», ни в рекомендациях");
+      toast("Волна не собралась: рекомендации VK недоступны");
       return;
     }
     if (state.shuffle) {
@@ -791,11 +821,8 @@ async function playWave() {
     state.queue = first.slice();
     state.index = 0;
     playCurrent();
-    toast(
-      library.length
-        ? "Моя волна из твоей музыки • дальше продолжится сама"
-        : "Волна из рекомендаций VK • добавь треки в «Мою музыку»",
-    );
+    const filtered = Object.keys(w.options).length > 0;
+    toast(filtered ? "Волна по твоим настройкам • дальше продолжится сама" : "Волна из рекомендаций VK • дальше продолжится сама");
     ensureWaveMore(WAVE_CHUNK);
   } catch (e) {
     state.wave.active = false;

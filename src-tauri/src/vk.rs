@@ -424,6 +424,7 @@ pub(crate) async fn stream_mix_audios(
     count: Option<i64>,
     offset: Option<i64>,
     mix_id: Option<String>,
+    options: Option<String>,
 ) -> Result<Value, String> {
     let mut p = Map::new();
     let mix = mix_id
@@ -437,7 +438,50 @@ pub(crate) async fn stream_mix_audios(
             p.insert("offset".into(), json!(start));
         }
     }
+    // VK принимает фильтры микса JSON-строкой в `options`; неизвестные ключи он молча игнорирует.
+    if let Some(raw) = options.map(|o| o.trim().to_string()).filter(|o| !o.is_empty()) {
+        p.insert("options".into(), json!(raw));
+    }
     vk_audio_call(&state, "audio.getStreamMixAudios", p).await
+}
+
+#[tauri::command]
+pub(crate) async fn stream_mix_settings(
+    state: State<'_, AppState>,
+    mix_id: Option<String>,
+) -> Result<Value, String> {
+    let mut p = Map::new();
+    let mix = mix_id
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| "common".to_string());
+    p.insert("mix_id".into(), json!(mix));
+    vk_audio_call(&state, "audio.getStreamMixSettings", p).await
+}
+
+#[tauri::command]
+pub(crate) async fn playlist_tracks(
+    state: State<'_, AppState>,
+    owner_id: i64,
+    playlist_id: i64,
+    access_key: Option<String>,
+    count: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Value, String> {
+    // `catalog.getSection` не принимает синтезированный `playlist<owner>_<id>` и отвечает 104,
+    // поэтому треки плейлиста читаем через `audio.get` с album_id.
+    let mut p = Map::new();
+    p.insert("owner_id".into(), json!(owner_id));
+    p.insert("album_id".into(), json!(playlist_id));
+    p.insert("count".into(), json!(count.unwrap_or(100).clamp(1, 200)));
+    p.insert("offset".into(), json!(offset.unwrap_or(0).max(0)));
+    if let Some(key) = access_key
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+    {
+        p.insert("access_key".into(), json!(key));
+    }
+    vk_audio_call(&state, "audio.get", p).await
 }
 
 #[tauri::command]
