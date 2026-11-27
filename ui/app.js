@@ -122,7 +122,11 @@ function bind() {
     updateMediaState("paused");
     savePlayback();
   });
-  audio.addEventListener("ended", () => next(true));
+  audio.addEventListener("ended", () => {
+    presenceKey = "";
+    invoke("discord_presence_clear").catch(() => {});
+    next(true);
+  });
   bindMediaSession();
   audio.addEventListener("loadedmetadata", () => {
     el("dur").textContent = fmtTime(audio.duration);

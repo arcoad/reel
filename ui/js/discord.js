@@ -60,8 +60,9 @@ async function pushDiscordPresence() {
     await invoke("discord_presence_clear").catch(() => {});
     return;
   }
-  if (audio.paused) {
-    if (presenceKey) {
+  const ended = audio.ended || (audio.duration > 0 && audio.currentTime >= audio.duration - 0.25);
+  if (audio.paused || ended) {
+    if (presenceKey || !t.local_id) {
       presenceKey = "";
       await invoke("discord_presence_clear").catch(() => {});
     }

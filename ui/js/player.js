@@ -613,6 +613,7 @@ function playCurrent(resume = 0) {
     if (audio.readyState >= 1) apply();
     else audio.addEventListener("loadedmetadata", apply, { once: true });
   }
+  presenceKey = "";
   renderActiveRow();
   schedulePlaybackSave();
 }
