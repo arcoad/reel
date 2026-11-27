@@ -16,7 +16,7 @@ use windows_sys::Win32::Storage::FileSystem::{CreateFileW, ReadFile, WriteFile};
 #[cfg(windows)]
 use windows_sys::Win32::System::Pipes::{NMPWAIT_WAIT_FOREVER, WaitNamedPipeW};
 
-pub(crate) const DISCORD_APP_ID: &str = "";
+pub(crate) const DISCORD_APP_ID: &str = "1575828210954936332";
 const PIPE_TEMPLATE: &str = r"\\.\pipe\discord-ipc-";
 
 pub(crate) struct DiscordPresence {
@@ -49,9 +49,6 @@ impl DiscordPresence {
     pub(crate) fn start(&mut self) -> Result<(), String> {
         if self.tx.is_some() {
             return Ok(());
-        }
-        if DISCORD_APP_ID.is_empty() {
-            return Err("ID приложения Discord не задан".into());
         }
         let (tx, rx) = channel::<Presence>();
         let stop = Arc::new(AtomicBool::new(false));
